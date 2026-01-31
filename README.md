@@ -60,12 +60,16 @@ This builds the development binary as `card-dev` to avoid conflicts with the rel
 card init
 card repo add /path/to/your/repo
 
-# Start an interactive conversation with engineering memory
+# Run once to configure Claude Code's MCP integration
 card ask
+# (Press Ctrl+C twice to exit after MCP is configured)
 
-# Or run a full artifact relay session
-card session start "add user authentication" --repo /path/to/your/repo
+# Now you can use either mode:
+card ask                          # Interactive conversation with memory
+card session start "feature X"    # Full artifact relay session
 ```
+
+The first `card ask` configures Claude Code to use CARD's MCP server. This enables CARD tools in all Claude Code sessions, including artifact relay phases.
 
 ## Two Ways to Use CARD
 
