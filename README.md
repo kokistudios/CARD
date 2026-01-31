@@ -43,8 +43,11 @@ Requires Go 1.21+
 ```bash
 git clone https://github.com/kokistudios/card.git
 cd card
-go install ./cmd/card
+go build -o card-dev ./cmd/card
+./card-dev --version
 ```
+
+This builds the development binary as `card-dev` to avoid conflicts with the released version. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development setup.
 
 ### Requirements
 

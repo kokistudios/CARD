@@ -178,6 +178,15 @@ Recall is triggered:
 - Export creates a `.card` bundle (gzipped tarball) with all session data
 - Import extracts to CARD_HOME, auto-links repos by matching remote URL
 
+## Development
+
+When working on CARD itself:
+
+- **`card`** — The released version installed via Homebrew/Scoop. Use for normal operation.
+- **`card-dev`** — The local development binary. Build with `go build -o card-dev ./cmd/card`.
+
+Both binaries share the same `~/.card` data directory. This lets you test changes against real sessions while keeping the released version as your default.
+
 ## Guiding Principles
 - **Deterministic over fuzzy**: structured recall, not similarity search
 - **Artifacts over chat**: durable outputs, not ephemeral conversation

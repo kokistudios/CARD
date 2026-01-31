@@ -14,9 +14,10 @@ Thanks for your interest in contributing to CARD.
 ```bash
 git clone https://github.com/kokistudios/card.git
 cd card
-go build ./...
-go install ./cmd/card
+go build -o card-dev ./cmd/card
 ```
+
+This builds the development binary as `card-dev` to avoid conflicts with the released version installed via Homebrew/Scoop.
 
 ### Testing
 
@@ -27,12 +28,15 @@ go vet ./...
 
 ### Running Locally
 
-After `go install`, ensure `~/go/bin` is in your PATH:
+Use `card-dev` for development and testing:
 
 ```bash
-export PATH="$HOME/go/bin:$PATH"
-card --version
+./card-dev --version
+./card-dev init
+./card-dev ask --repo /path/to/your/repo
 ```
+
+If you also have the released version installed (`brew install kokistudios/tap/card`), it remains available as `card` — this lets you test against both versions.
 
 ## Project Structure
 
