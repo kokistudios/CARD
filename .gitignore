@@ -1,0 +1,22 @@
+# Compiled binary
+card
+*.exe
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go
+vendor/
+
+# Test artifacts
+/tmp/
+*.test
+
+# Claude Code local settings
+.claude/

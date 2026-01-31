@@ -1,0 +1,80 @@
+version: 2
+
+project_name: card
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: card
+    main: ./cmd/card
+    binary: card
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: kokistudios
+    name: card
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
+
+brews:
+  - name: card
+    repository:
+      owner: kokistudios
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/kokistudios/card"
+    description: "Context Artifact Relay for Development — engineering memory for code changes"
+    license: "MIT"
+    install: |
+      bin.install "card"
+    test: |
+      system "#{bin}/card", "--version"
+
+scoops:
+  - name: card
+    repository:
+      owner: kokistudios
+      name: scoop-bucket
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/kokistudios/card"
+    description: "Context Artifact Relay for Development — engineering memory for code changes"
+    license: "MIT"
