@@ -60,16 +60,12 @@ This builds the development binary as `card-dev` to avoid conflicts with the rel
 card init
 card repo add /path/to/your/repo
 
-# Run once to configure Claude Code's MCP integration
-card ask
-# (Press Ctrl+C twice to exit after MCP is configured)
-
-# Now you can use either mode:
+# Start using CARD
 card ask                          # Interactive conversation with memory
 card session start "feature X"    # Full artifact relay session
 ```
 
-The first `card ask` configures Claude Code to use CARD's MCP server. This enables CARD tools in all Claude Code sessions, including artifact relay phases.
+CARD automatically configures Claude Code's MCP integration on first run. No manual setup required.
 
 ## Two Ways to Use CARD
 
@@ -225,6 +221,18 @@ All data lives in `CARD_HOME` (default `~/.card/`). CARD never modifies your rep
 ```
 
 The directory is Obsidian-compatible — open it as a vault to see the graph of repos → sessions → decisions.
+
+### Artifact Lifecycle
+
+Some artifacts are **ephemeral** and cleaned up after session completion:
+- `execution_log.md`, `verification_notes.md` — process artifacts
+- `investigation_summary.md`, `implementation_guide.md` — planning artifacts
+
+These serve their purpose during the session, but only **outcomes** persist:
+- `capsules.md` — decisions (the queryable memory)
+- `milestone_ledger.md` — file manifest, patterns, rollback commands
+
+This keeps `~/.card/` bounded while preserving what matters for future recall.
 
 ## Configuration
 

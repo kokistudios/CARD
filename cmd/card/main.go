@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -48,6 +49,8 @@ func main() {
 		Long:  "A local CLI tool that captures, structures, and reuses engineering intent across code changes.",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			ui.Init(noColor)
+			// Ensure MCP is configured on every invocation (fast, silent unless changes made)
+			ensureMCPConfigured(false)
 		},
 	}
 
@@ -1796,9 +1799,12 @@ On first run, this command will configure Claude Code to use CARD's MCP server.`
 				}
 			}
 
-			// Ensure MCP is configured for Claude Code
-			if err := ensureMCPConfigured(setupMCP); err != nil {
-				return err
+			// Force MCP reconfiguration if --setup-mcp flag is set
+			// (normal setup already happens in PersistentPreRun)
+			if setupMCP {
+				if err := ensureMCPConfigured(true); err != nil {
+					return err
+				}
 			}
 
 			// Bootstrap context: fetch recent decisions and sessions
@@ -1841,11 +1847,18 @@ On first run, this command will configure Claude Code to use CARD's MCP server.`
 }
 
 // ensureMCPConfigured checks and configures Claude Code's MCP settings for CARD.
+// It reads ~/.claude.json directly for speed (instead of calling `claude mcp list`).
+// It auto-removes the alternate MCP server (card vs card-dev) to avoid confusion.
 func ensureMCPConfigured(force bool) error {
 	// Find the card binary path and determine MCP server name
 	cardPath, err := os.Executable()
 	if err != nil {
 		cardPath = "card" // Fall back to PATH lookup
+	}
+
+	// Resolve symlinks to get the actual binary path
+	if resolved, err := filepath.EvalSymlinks(cardPath); err == nil {
+		cardPath = resolved
 	}
 
 	// Use binary name as MCP server name (allows card-dev alongside card)
@@ -1854,25 +1867,83 @@ func ensureMCPConfigured(force bool) error {
 		mcpName = "card"
 	}
 
-	// Check if already configured using claude mcp list
+	// Determine the alternate name (card <-> card-dev)
+	alternateName := "card"
+	if mcpName == "card" {
+		alternateName = "card-dev"
+	}
+
+	// Read Claude's MCP config directly for speed
+	// Note: MCP servers are stored in ~/.claude.json (not ~/.claude/settings.json)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil // Silently skip if we can't find home dir
+	}
+	settingsPath := filepath.Join(homeDir, ".claude.json")
+
+	type mcpServerConfig struct {
+		Type    string   `json:"type"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	type claudeSettings struct {
+		MCPServers map[string]mcpServerConfig `json:"mcpServers"`
+	}
+
+	var settings claudeSettings
+	settingsData, err := os.ReadFile(settingsPath)
+	if err == nil {
+		// Parse existing settings
+		if err := json.Unmarshal(settingsData, &settings); err != nil {
+			settings = claudeSettings{MCPServers: make(map[string]mcpServerConfig)}
+		}
+	} else {
+		settings = claudeSettings{MCPServers: make(map[string]mcpServerConfig)}
+	}
+
+	if settings.MCPServers == nil {
+		settings.MCPServers = make(map[string]mcpServerConfig)
+	}
+
+	// Check if already correctly configured
 	if !force {
-		cmd := exec.Command("claude", "mcp", "list")
-		output, err := cmd.Output()
-		if err == nil && strings.Contains(string(output), mcpName+":") {
-			return nil // Already configured
+		if existing, ok := settings.MCPServers[mcpName]; ok {
+			if existing.Command == cardPath {
+				// Already configured with correct path
+				// Still check if we need to remove the alternate
+				if _, hasAlternate := settings.MCPServers[alternateName]; hasAlternate {
+					// Remove alternate from user scope (where we configure)
+					// Also try project scope in case it exists there too
+					exec.Command("claude", "mcp", "remove", alternateName, "-s", "user").Run()
+					exec.Command("claude", "mcp", "remove", alternateName, "-s", "local").Run()
+					ui.Success(fmt.Sprintf("Removed conflicting MCP server (%s)", alternateName))
+				}
+				return nil
+			}
 		}
 	}
 
-	// Remove existing server if force reconfiguring
-	if force {
-		exec.Command("claude", "mcp", "remove", mcpName).Run()
+	// Remove alternate MCP server if it exists (card vs card-dev)
+	if _, hasAlternate := settings.MCPServers[alternateName]; hasAlternate {
+		exec.Command("claude", "mcp", "remove", alternateName, "-s", "user").Run()
+		exec.Command("claude", "mcp", "remove", alternateName, "-s", "local").Run()
+	}
+
+	// Remove existing server if force reconfiguring or if path changed
+	if existing, ok := settings.MCPServers[mcpName]; ok {
+		if force || existing.Command != cardPath {
+			exec.Command("claude", "mcp", "remove", mcpName, "-s", "user").Run()
+			exec.Command("claude", "mcp", "remove", mcpName, "-s", "local").Run()
+		}
 	}
 
 	// Add CARD MCP server using Claude's native command
 	// Use --scope user to make it available globally
 	cmd := exec.Command("claude", "mcp", "add", "--scope", "user", mcpName, "--", cardPath, "mcp-serve")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to configure CARD MCP server: %w\nOutput: %s", err, output)
+		// Silently fail - MCP config is nice-to-have, not critical
+		_ = output
+		return nil
 	}
 
 	ui.Success(fmt.Sprintf("Configured Claude Code to use CARD MCP server (%s)", mcpName))

@@ -68,6 +68,23 @@ On Windows, use `card-dev.exe` or just `card-dev` (PowerShell resolves it).
 
 If you also have the released version installed (Homebrew on macOS/Linux, Scoop on Windows), it remains available as `card` — this lets you test against both versions.
 
+### MCP Server Auto-Configuration
+
+CARD automatically configures Claude Code's MCP integration on every invocation. Importantly:
+
+- **Running `card-dev`** registers the `card-dev` MCP server and **removes** the `card` MCP server
+- **Running `card`** registers the `card` MCP server and **removes** the `card-dev` MCP server
+
+This ensures you're always using the MCP server that matches the binary you're running, preventing confusion about which version's tools Claude is using.
+
+Both binaries share the same `~/.card` data directory, so your sessions, capsules, and repos are accessible from either version. Only the MCP server registration switches.
+
+To force MCP reconfiguration (e.g., if paths changed):
+
+```bash
+card-dev ask --setup-mcp
+```
+
 ## Project Structure
 
 ```

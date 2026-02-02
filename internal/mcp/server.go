@@ -69,7 +69,7 @@ func (s *Server) registerTools() {
 	// card_session_artifacts - get artifacts from a session
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "card_session_artifacts",
-		Description: "Get FULL session artifacts (milestone_ledger, execution_log, verification_notes) - can be 500+ lines. Returns latest execution_log (execution_attempts field indicates total attempts). verification_notes shows issues from last verify phase if re-execution was requested. Use this for deep dives into implementation details, SQL queries, verification checklists. For compact decision summaries, use card_recall instead.",
+		Description: "Get session artifacts. For ACTIVE sessions: returns milestone_ledger, execution_log, and verification_notes (can be 500+ lines total). For COMPLETED sessions: only milestone_ledger persists — execution logs are ephemeral and cleaned up after completion. Use card_recall for queryable decisions, milestone_ledger for file manifest and patterns. Use this for deep dives into implementation details, SQL queries, verification checklists during active sessions.",
 	}, s.handleSessionArtifacts)
 
 	// card_session_execution_history - get all versioned execution logs
@@ -141,8 +141,8 @@ func (s *Server) registerTools() {
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_session_summary",
 		Description: "Get a lightweight summary of a session - just the description, status, and decision list. " +
-			"Use this for quick 'catch me up' queries. For full artifacts (file manifest, execution logs), " +
-			"use card_session_artifacts instead.",
+			"Use this for quick 'catch me up' queries. For full artifacts (file manifest, patterns, and " +
+			"execution logs if session is still active), use card_session_artifacts instead.",
 	}, s.handleSessionSummary)
 
 	// card_hotspots - find areas with most decisions
@@ -1755,6 +1755,26 @@ func (s *Server) handleAgentGuidance(ctx context.Context, req *mcp.CallToolReque
 
 ## The Dream: Push, Don't Pull
 CARD should tell you what you need to know BEFORE you make mistakes. Don't wait to be asked - push relevant context proactively.
+
+## Artifact Lifecycle — What Survives vs. What's Ephemeral
+
+Understanding what persists is critical for querying sessions effectively:
+
+**Durable (permanent):**
+- milestone_ledger.md — File manifest, patterns, decisions summary, rollback commands
+- capsules.md — All decision capsules for the session
+- session.yaml — Metadata, status, execution history timestamps
+
+**Ephemeral (cleaned up after session completion):**
+- execution_log.md — Detailed implementation log
+- verification_notes.md — Verification checklist and findings
+- investigation_summary.md — Initial investigation notes
+- implementation_guide.md — The plan that was executed
+
+**What this means for queries:**
+- For COMPLETED sessions: Use card_recall for decisions, card_session_artifacts for milestone_ledger
+- For ACTIVE sessions: card_session_artifacts returns execution_log and verification_notes too
+- Don't expect execution logs for old sessions — the decisions and file manifest capture what matters
 
 ## When to Call CARD Tools
 

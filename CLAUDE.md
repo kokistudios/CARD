@@ -103,6 +103,32 @@ Additional states: `paused`, `abandoned`, `quickfix_executing` (for quickfix mod
         <repo-id>/                  # Per-repo git tracking
 ```
 
+### Artifact Lifecycle
+
+CARD artifacts have different lifespans by design:
+
+| Artifact | Lifespan | Purpose |
+|----------|----------|---------|
+| `session.yaml` | Permanent | Metadata, status, execution history timestamps |
+| `capsules.md` | Permanent | All decision capsules — the queryable memory |
+| `milestone_ledger.md` | Permanent | File manifest, patterns, decisions summary, rollback commands |
+| `<session-id>.md` | Permanent | Obsidian hub node linking to related artifacts |
+| `investigation_summary.md` | Ephemeral | Investigation notes — cleaned up after completion |
+| `implementation_guide.md` | Ephemeral | The plan — cleaned up after completion |
+| `execution_log.md` | Ephemeral | Implementation details — cleaned up after completion |
+| `verification_notes.md` | Ephemeral | Verification findings — cleaned up after completion |
+
+**Why ephemeral artifacts are cleaned up:**
+- Execution logs are *process artifacts* (HOW work was done)
+- Decisions and milestone_ledger are *outcome artifacts* (WHAT was decided and WHY)
+- Only outcomes need to persist for future recall
+- Keeps `~/.card/` from growing unboundedly
+
+**For MCP tool queries:**
+- Completed sessions: `card_session_artifacts` returns only `milestone_ledger`
+- Active sessions: `card_session_artifacts` returns all artifacts including execution logs
+- Use `card_recall` for decisions — they're always available
+
 ### Decision Capsule Structure
 ```yaml
 id: <generated>
@@ -186,6 +212,20 @@ When working on CARD itself:
 - **`card-dev`** — The local development binary. Build with `go build -o card-dev ./cmd/card`.
 
 Both binaries share the same `~/.card` data directory. This lets you test changes against real sessions while keeping the released version as your default.
+
+### MCP Server Auto-Configuration
+
+CARD automatically configures Claude Code's MCP server on every invocation. The binary name determines the MCP server name:
+
+- Running `card-dev` → registers `card-dev` MCP server, removes `card` MCP server
+- Running `card` → registers `card` MCP server, removes `card-dev` MCP server
+
+This prevents confusion about which version's tools Claude is using. The configuration:
+- Reads `~/.claude.json` directly for speed (no subprocess)
+- Removes from both user and project scopes
+- Only prints a message when changes are made
+
+Use `card ask --setup-mcp` to force reconfiguration if needed.
 
 ## Guiding Principles
 - **Deterministic over fuzzy**: structured recall, not similarity search
