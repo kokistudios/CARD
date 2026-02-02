@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -1841,34 +1842,40 @@ On first run, this command will configure Claude Code to use CARD's MCP server.`
 
 // ensureMCPConfigured checks and configures Claude Code's MCP settings for CARD.
 func ensureMCPConfigured(force bool) error {
-	// Check if already configured using claude mcp list
-	if !force {
-		cmd := exec.Command("claude", "mcp", "list")
-		output, err := cmd.Output()
-		if err == nil && strings.Contains(string(output), "card:") {
-			return nil // Already configured
-		}
-	}
-
-	// Find the card binary path
+	// Find the card binary path and determine MCP server name
 	cardPath, err := os.Executable()
 	if err != nil {
 		cardPath = "card" // Fall back to PATH lookup
 	}
 
-	// Remove existing card server if force reconfiguring
+	// Use binary name as MCP server name (allows card-dev alongside card)
+	mcpName := filepath.Base(cardPath)
+	if mcpName == "" {
+		mcpName = "card"
+	}
+
+	// Check if already configured using claude mcp list
+	if !force {
+		cmd := exec.Command("claude", "mcp", "list")
+		output, err := cmd.Output()
+		if err == nil && strings.Contains(string(output), mcpName+":") {
+			return nil // Already configured
+		}
+	}
+
+	// Remove existing server if force reconfiguring
 	if force {
-		exec.Command("claude", "mcp", "remove", "card").Run()
+		exec.Command("claude", "mcp", "remove", mcpName).Run()
 	}
 
 	// Add CARD MCP server using Claude's native command
 	// Use --scope user to make it available globally
-	cmd := exec.Command("claude", "mcp", "add", "--scope", "user", "card", "--", cardPath, "mcp-serve")
+	cmd := exec.Command("claude", "mcp", "add", "--scope", "user", mcpName, "--", cardPath, "mcp-serve")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to configure CARD MCP server: %w\nOutput: %s", err, output)
 	}
 
-	ui.Success("Configured Claude Code to use CARD MCP server")
+	ui.Success(fmt.Sprintf("Configured Claude Code to use CARD MCP server (%s)", mcpName))
 	return nil
 }
 

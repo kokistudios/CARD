@@ -14,10 +14,38 @@ Thanks for your interest in contributing to CARD.
 ```bash
 git clone https://github.com/kokistudios/card.git
 cd card
-go build -o card-dev ./cmd/card
+go build -o ~/bin/card-dev ./cmd/card
 ```
 
-This builds the development binary as `card-dev` to avoid conflicts with the released version installed via Homebrew/Scoop.
+This builds the development binary as `card-dev` directly to `~/bin/`, making it available system-wide. Make sure `~/bin` is in your PATH:
+
+```bash
+mkdir -p ~/bin
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc  # or ~/.bashrc
+source ~/.zshrc
+```
+
+This avoids conflicts with the released version installed via Homebrew.
+
+#### Windows
+
+```powershell
+git clone https://github.com/kokistudios/card.git
+cd card
+go build -o $env:USERPROFILE\bin\card-dev.exe ./cmd/card
+```
+
+Add `%USERPROFILE%\bin` to your PATH:
+
+```powershell
+# Create bin directory if needed
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\bin"
+
+# Add to PATH permanently (requires new terminal to take effect)
+[Environment]::SetEnvironmentVariable("Path", "$env:USERPROFILE\bin;" + [Environment]::GetEnvironmentVariable("Path", "User"), "User")
+```
+
+This avoids conflicts with the released version installed via Scoop.
 
 ### Testing
 
@@ -31,12 +59,14 @@ go vet ./...
 Use `card-dev` for development and testing:
 
 ```bash
-./card-dev --version
-./card-dev init
-./card-dev ask --repo /path/to/your/repo
+card-dev --version
+card-dev init
+card-dev ask --repo /path/to/your/repo
 ```
 
-If you also have the released version installed (`brew install kokistudios/tap/card`), it remains available as `card` — this lets you test against both versions.
+On Windows, use `card-dev.exe` or just `card-dev` (PowerShell resolves it).
+
+If you also have the released version installed (Homebrew on macOS/Linux, Scoop on Windows), it remains available as `card` — this lets you test against both versions.
 
 ## Project Structure
 

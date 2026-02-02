@@ -92,12 +92,19 @@ Continue the dialogue until:
 - The developer explicitly indicates investigation is sufficient
 
 ### Phase 3: Write the Artifact
-Only after the investigation dialogue is **thoroughly** complete, produce the artifact file at:
-`{{.OutputDir}}/{{.ArtifactFilename}}`
+Only after the investigation dialogue is **thoroughly** complete, use the `card_write_artifact` MCP tool to save the investigation summary:
+
+```
+card_write_artifact({
+  "session_id": "{{.SessionID}}",
+  "phase": "investigate",
+  "content": "<your full artifact with frontmatter>"
+})
+```
 
 Tell the developer: **"Investigation artifact written. To continue the CARD flow, press Ctrl+C twice."**
 
-The artifact MUST have this YAML frontmatter:
+The content MUST include this YAML frontmatter at the start:
 ```yaml
 ---
 session: {{.SessionID}}
@@ -106,6 +113,8 @@ timestamp: <current ISO 8601>
 status: final
 ---
 ```
+
+**Important:** Do NOT use the Write tool for this artifact. The `card_write_artifact` tool ensures the artifact is stored in the correct location.
 
 Followed by the investigation summary with these sections:
 - **⚠️ Open Questions** (ONLY if unresolved questions exist — omit entirely if none)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kokistudios/card/internal/artifact"
 	"github.com/kokistudios/card/internal/capsule"
 	"github.com/kokistudios/card/internal/change"
 	"github.com/kokistudios/card/internal/recall"
@@ -176,6 +177,15 @@ func (s *Server) registerTools() {
 			"understand how to use CARD tools effectively. Returns best practices for surfacing context " +
 			"and capturing decisions.",
 	}, s.handleAgentGuidance)
+
+	// card_write_artifact - deterministically write phase artifacts
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_write_artifact",
+		Description: "Write a CARD phase artifact to the correct location. USE THIS instead of the Write tool " +
+			"when producing phase artifacts (investigation_summary, implementation_guide, execution_log, etc.). " +
+			"The tool handles path resolution — you provide the content, CARD handles where it goes. " +
+			"Content MUST include valid YAML frontmatter with session, phase, timestamp, and status fields.",
+	}, s.handleWriteArtifact)
 }
 
 // RecallArgs defines the input for card_recall.
@@ -1831,4 +1841,80 @@ func generateRecommendations(files map[string]FileDecisions, relevant []CapsuleS
 	}
 
 	return strings.Join(parts, " ")
+}
+
+// WriteArtifactArgs defines input for card_write_artifact.
+type WriteArtifactArgs struct {
+	SessionID string `json:"session_id" jsonschema:"The session ID this artifact belongs to"`
+	Phase     string `json:"phase" jsonschema:"The phase producing this artifact: investigate, plan, execute, or record"`
+	Content   string `json:"content" jsonschema:"The full artifact content including YAML frontmatter (---\\nsession: ...\\n---)"`
+}
+
+// WriteArtifactResult is the output of card_write_artifact.
+type WriteArtifactResult struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+func (s *Server) handleWriteArtifact(ctx context.Context, req *mcp.CallToolRequest, args WriteArtifactArgs) (*mcp.CallToolResult, any, error) {
+	if args.SessionID == "" {
+		return nil, nil, fmt.Errorf("session_id is required")
+	}
+	if args.Phase == "" {
+		return nil, nil, fmt.Errorf("phase is required")
+	}
+	if args.Content == "" {
+		return nil, nil, fmt.Errorf("content is required")
+	}
+
+	// Validate session exists
+	sess, err := session.Get(s.store, args.SessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("session not found: %s", args.SessionID)
+	}
+
+	// Parse the content as an artifact
+	a, err := artifact.Parse([]byte(args.Content))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse artifact content: %w", err)
+	}
+
+	// Ensure frontmatter has required fields
+	if a.Frontmatter.Session == "" {
+		a.Frontmatter.Session = args.SessionID
+	}
+	if a.Frontmatter.Phase == "" {
+		a.Frontmatter.Phase = args.Phase
+	}
+	if a.Frontmatter.Timestamp.IsZero() {
+		a.Frontmatter.Timestamp = time.Now().UTC()
+	}
+	if a.Frontmatter.Status == "" {
+		a.Frontmatter.Status = "final"
+	}
+	if len(a.Frontmatter.Repos) == 0 {
+		a.Frontmatter.Repos = sess.Repos
+	}
+
+	// Validate phase
+	validPhases := map[string]bool{
+		"investigate": true,
+		"plan":        true,
+		"execute":     true,
+		"record":      true,
+	}
+	if !validPhases[args.Phase] {
+		return nil, nil, fmt.Errorf("invalid phase: %s (must be investigate, plan, execute, or record)", args.Phase)
+	}
+
+	// Store at session level
+	destPath, err := artifact.StoreSessionLevel(s.store, args.SessionID, a)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to store artifact: %w", err)
+	}
+
+	return nil, WriteArtifactResult{
+		Path:    destPath,
+		Message: fmt.Sprintf("Artifact written to %s", destPath),
+	}, nil
 }

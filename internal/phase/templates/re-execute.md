@@ -98,10 +98,17 @@ This includes:
 
 ## Output Artifact
 
-After implementation, produce the execution log at:
-`{{.OutputDir}}/{{.ArtifactFilename}}`
+After implementation, use the `card_write_artifact` MCP tool to save the execution log:
 
-The artifact MUST have this YAML frontmatter:
+```
+card_write_artifact({
+  "session_id": "{{.SessionID}}",
+  "phase": "execute",
+  "content": "<your full artifact with frontmatter>"
+})
+```
+
+The content MUST include this YAML frontmatter at the start:
 ```yaml
 ---
 session: {{.SessionID}}
@@ -110,6 +117,8 @@ timestamp: <current ISO 8601>
 status: final
 ---
 ```
+
+**Important:** Do NOT use the Write tool for this artifact. The `card_write_artifact` tool ensures the artifact is stored in the correct location.
 
 Include these sections (in this order of prominence):
 
