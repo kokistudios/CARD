@@ -272,7 +272,7 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 	}
 
 	// Group by phase
-	phaseOrder := []string{"quickfix-seed", "investigate", "plan", "execute", "simplify", "record"}
+	phaseOrder := []string{"ask", "investigate", "plan", "execute", "simplify", "record"}
 	byPhase := make(map[string][]Capsule)
 	for _, c := range capsules {
 		byPhase[c.Phase] = append(byPhase[c.Phase], c)
@@ -592,14 +592,14 @@ func Get(st *store.Store, id string) (*Capsule, error) {
 // phaseRank returns a numeric rank for phase ordering (higher = later in pipeline).
 func phaseRank(phase string) int {
 	ranks := map[string]int{
-		"quickfix-seed": 0,
-		"investigate":   1,
-		"plan":          2,
-		"review":        3,
-		"execute":       4,
-		"verify":        5,
-		"simplify":      6,
-		"record":        7,
+		"ask":         0, // Decisions recorded during card ask
+		"investigate": 1,
+		"plan":        2,
+		"review":      3,
+		"execute":     4,
+		"verify":      5,
+		"simplify":    6,
+		"record":      7,
 	}
 	if r, ok := ranks[phase]; ok {
 		return r
@@ -826,6 +826,9 @@ func Invalidate(st *store.Store, id, reason, learned, supersededBy string) error
 	}
 
 	c.Status = StatusInvalidated
+	c.InvalidationReason = reason
+	c.Learned = learned
+
 	if supersededBy != "" {
 		c.SupersededBy = supersededBy
 

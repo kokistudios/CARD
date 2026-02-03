@@ -14,14 +14,15 @@ import (
 
 // RecallQuery defines what to recall.
 type RecallQuery struct {
-	Files            []string
-	RepoID           string
-	RepoPath         string // local path, needed for git correlation
-	Tags             []string
-	Query            string // full-text search across question/choice/rationale
-	MaxCapsules      int    // 0 = default (20)
-	IncludeEvolution bool   // if true, show all phases of each decision
-	RecentOnly       bool   // if true, return most recent decisions (no filters)
+	Files              []string
+	RepoID             string
+	RepoPath           string // local path, needed for git correlation
+	Tags               []string
+	Query              string // full-text search across question/choice/rationale
+	MaxCapsules        int    // 0 = default (20)
+	IncludeEvolution   bool   // if true, show all phases of each decision
+	IncludeInvalidated bool   // if true, include invalidated capsules
+	RecentOnly         bool   // if true, return most recent decisions (no filters)
 }
 
 // SessionSummary is a lightweight view of a session for recall results.
@@ -89,8 +90,8 @@ type intermediateResult struct {
 }
 
 // ByFiles finds capsules whose tags match the given file paths.
-func ByFiles(st *store.Store, repoID string, files []string, includeEvolution bool) (*intermediateResult, error) {
-	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution})
+func ByFiles(st *store.Store, repoID string, files []string, includeEvolution, includeInvalidated bool) (*intermediateResult, error) {
+	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution, IncludeInvalidated: includeInvalidated})
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +116,7 @@ func ByFiles(st *store.Store, repoID string, files []string, includeEvolution bo
 }
 
 // ByRepo returns all capsules and sessions for a given repo.
-func ByRepo(st *store.Store, repoID string, includeEvolution bool) (*intermediateResult, error) {
+func ByRepo(st *store.Store, repoID string, includeEvolution, includeInvalidated bool) (*intermediateResult, error) {
 	sessions, err := session.List(st)
 	if err != nil {
 		return nil, err
@@ -141,7 +142,7 @@ func ByRepo(st *store.Store, repoID string, includeEvolution bool) (*intermediat
 
 	// Gather capsules from matching sessions
 	for sessID := range sessionIDs {
-		caps, err := capsule.List(st, capsule.Filter{SessionID: &sessID, RepoID: &repoID, ShowEvolution: includeEvolution})
+		caps, err := capsule.List(st, capsule.Filter{SessionID: &sessID, RepoID: &repoID, ShowEvolution: includeEvolution, IncludeInvalidated: includeInvalidated})
 		if err != nil {
 			continue
 		}
@@ -153,8 +154,8 @@ func ByRepo(st *store.Store, repoID string, includeEvolution bool) (*intermediat
 
 // ByTags finds capsules with matching tags (case-insensitive, partial match).
 // Also expands tags with synonyms for fuzzy matching (e.g., "auth" matches "authentication").
-func ByTags(st *store.Store, tags []string, includeEvolution bool) (*intermediateResult, error) {
-	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution})
+func ByTags(st *store.Store, tags []string, includeEvolution, includeInvalidated bool) (*intermediateResult, error) {
+	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution, IncludeInvalidated: includeInvalidated})
 	if err != nil {
 		return nil, err
 	}
@@ -177,8 +178,8 @@ func ByTags(st *store.Store, tags []string, includeEvolution bool) (*intermediat
 }
 
 // ByText finds capsules with matching text in question, choice, or rationale.
-func ByText(st *store.Store, query string, includeEvolution bool) (*intermediateResult, error) {
-	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution})
+func ByText(st *store.Store, query string, includeEvolution, includeInvalidated bool) (*intermediateResult, error) {
+	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution, IncludeInvalidated: includeInvalidated})
 	if err != nil {
 		return nil, err
 	}
@@ -197,8 +198,8 @@ func ByText(st *store.Store, query string, includeEvolution bool) (*intermediate
 }
 
 // ByRecent returns the most recent capsules, sorted by timestamp (newest first).
-func ByRecent(st *store.Store, limit int, includeEvolution bool) (*RecallResult, error) {
-	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution})
+func ByRecent(st *store.Store, limit int, includeEvolution, includeInvalidated bool) (*RecallResult, error) {
+	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution, IncludeInvalidated: includeInvalidated})
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +239,7 @@ func matchesText(c capsule.Capsule, query string) bool {
 }
 
 // ByGitHistory finds capsules linked to commits that touched the given files.
-func ByGitHistory(st *store.Store, repoID, repoPath string, files []string, includeEvolution bool) (*intermediateResult, error) {
+func ByGitHistory(st *store.Store, repoID, repoPath string, files []string, includeEvolution, includeInvalidated bool) (*intermediateResult, error) {
 	if repoPath == "" || len(files) == 0 {
 		return &intermediateResult{}, nil
 	}
@@ -250,7 +251,7 @@ func ByGitHistory(st *store.Store, repoID, repoPath string, files []string, incl
 	}
 
 	// Get all capsules and match against commit SHAs
-	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution})
+	allCapsules, err := capsule.List(st, capsule.Filter{ShowEvolution: includeEvolution, IncludeInvalidated: includeInvalidated})
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +287,7 @@ func Query(st *store.Store, q RecallQuery) (*RecallResult, error) {
 		if limit <= 0 {
 			limit = 15
 		}
-		return ByRecent(st, limit, q.IncludeEvolution)
+		return ByRecent(st, limit, q.IncludeEvolution, q.IncludeInvalidated)
 	}
 
 	scored := map[string]ScoredCapsule{}
@@ -294,7 +295,7 @@ func Query(st *store.Store, q RecallQuery) (*RecallResult, error) {
 
 	// File-based recall (cross-repo if no repo specified)
 	if len(q.Files) > 0 {
-		r, err := ByFiles(st, q.RepoID, q.Files, q.IncludeEvolution)
+		r, err := ByFiles(st, q.RepoID, q.Files, q.IncludeEvolution, q.IncludeInvalidated)
 		if err == nil {
 			for _, c := range r.Capsules {
 				if existing, ok := scored[c.ID]; !ok || MatchExactFile < existing.Tier {
@@ -307,7 +308,7 @@ func Query(st *store.Store, q RecallQuery) (*RecallResult, error) {
 
 	// Git correlation
 	if len(q.Files) > 0 && q.RepoPath != "" {
-		r, err := ByGitHistory(st, q.RepoID, q.RepoPath, q.Files, q.IncludeEvolution)
+		r, err := ByGitHistory(st, q.RepoID, q.RepoPath, q.Files, q.IncludeEvolution, q.IncludeInvalidated)
 		if err == nil {
 			for _, c := range r.Capsules {
 				if _, ok := scored[c.ID]; !ok {
@@ -320,7 +321,7 @@ func Query(st *store.Store, q RecallQuery) (*RecallResult, error) {
 
 	// Tag-based recall
 	if len(q.Tags) > 0 {
-		r, err := ByTags(st, q.Tags, q.IncludeEvolution)
+		r, err := ByTags(st, q.Tags, q.IncludeEvolution, q.IncludeInvalidated)
 		if err == nil {
 			for _, c := range r.Capsules {
 				if _, ok := scored[c.ID]; !ok {
@@ -333,7 +334,7 @@ func Query(st *store.Store, q RecallQuery) (*RecallResult, error) {
 
 	// Full-text search on question/choice/rationale
 	if q.Query != "" {
-		r, err := ByText(st, q.Query, q.IncludeEvolution)
+		r, err := ByText(st, q.Query, q.IncludeEvolution, q.IncludeInvalidated)
 		if err == nil {
 			for _, c := range r.Capsules {
 				if _, ok := scored[c.ID]; !ok {
@@ -346,7 +347,7 @@ func Query(st *store.Store, q RecallQuery) (*RecallResult, error) {
 
 	// Repo-based recall (only if no files/tags/query specified, to avoid noise)
 	if q.RepoID != "" && len(q.Files) == 0 && len(q.Tags) == 0 && q.Query == "" {
-		r, err := ByRepo(st, q.RepoID, q.IncludeEvolution)
+		r, err := ByRepo(st, q.RepoID, q.IncludeEvolution, q.IncludeInvalidated)
 		if err == nil {
 			for _, c := range r.Capsules {
 				if _, ok := scored[c.ID]; !ok {

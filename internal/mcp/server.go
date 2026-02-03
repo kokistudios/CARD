@@ -54,20 +54,42 @@ func (s *Server) Run(ctx context.Context) error {
 	return s.server.Run(ctx, &mcp.StdioTransport{})
 }
 
+// detectCurrentRepo attempts to find a registered repo from the current working directory.
+// Returns the repo ID if found, empty string otherwise.
+func (s *Server) detectCurrentRepo() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	// List all registered repos and check if cwd is within any of them
+	repos, err := repo.List(s.store)
+	if err != nil {
+		return ""
+	}
+
+	for _, r := range repos {
+		// Check if cwd is the repo path or a subdirectory
+		if strings.HasPrefix(cwd, r.LocalPath) {
+			return r.ID
+		}
+	}
+
+	return ""
+}
+
 // registerTools adds all CARD tools to the MCP server.
 func (s *Server) registerTools() {
-	// card_quickfix_start - promote ask discovery to recorded session
+	// card_promote_to_session - promote ask session to standard session for implementation
 	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_quickfix_start",
-		Description: "Create a quickfix session from a card ask discovery. " +
-			"WHEN TO OFFER: Proactively suggest this when you discover something during card ask that needs " +
-			"immediate action — a bug, security vulnerability, or fix that emerged from exploring prior decisions. " +
-			"Don't wait for the user to ask; if you find something fixable, offer to create a quickfix session. " +
-			"BEFORE CALLING: You MUST (1) explain that a quickfix session will record this fix with decision capture, " +
-			"skipping investigation/planning since you've already done that discovery together, " +
-			"(2) ask for explicit permission, (3) only then call with user_confirmed=true. " +
-			"When the tool succeeds, display the next_steps field exactly as returned.",
-	}, s.handleQuickfixStart)
+		Name: "card_promote_to_session",
+		Description: "Promote an ask session to a full CARD session for implementation work. " +
+			"Use this when the conversation reveals work that should be tracked with phases " +
+			"(bug fixes, feature additions, refactoring). " +
+			"BEFORE CALLING: (1) Explain that a session will capture implementation with full decision tracking, " +
+			"(2) Ask for explicit permission, (3) Only then call with user_confirmed=true. " +
+			"Returns next steps for the user to run the session.",
+	}, s.handlePromoteToSession)
 
 	// card_record - record a decision or finding mid-phase
 	mcp.AddTool(s.server, &mcp.Tool{
@@ -75,7 +97,7 @@ func (s *Server) registerTools() {
 		Description: "Record a decision or finding immediately without waiting for artifact extraction. " +
 			"USE THIS when you make a significant decision during any phase - the decision survives even if " +
 			"the session crashes or re-executes. Recorded capsules start as 'hypothesis' status until verified. " +
-			"If no session_id provided, finds the most recent active session.",
+			"If no session_id provided, finds the most recent active session or creates an ask session automatically.",
 	}, s.handleRecord)
 
 	// card_agent_guidance - get proactive usage instructions
@@ -111,7 +133,8 @@ func (s *Server) registerTools() {
 			"- require_confirmation=true: Returns proposal_id with similar/contradicting decisions. " +
 			"Present to human, then call card_decision_confirm to finalize.\n\n" +
 			"This replaces manual '### Decision:' blocks in artifacts. " +
-			"Decisions captured here are immediately queryable via card_query.",
+			"Decisions captured here are immediately queryable via card_query. " +
+			"If no session_id provided, finds the most recent active session or creates an ask session automatically.",
 	}, s.handleDecision)
 
 	// card_decision_confirm - confirm a proposed architectural decision
@@ -249,12 +272,19 @@ type SessionSummary struct {
 }
 
 func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, args RecallArgs) (*mcp.CallToolResult, any, error) {
+	// If explicitly requesting invalidated status, auto-enable IncludeInvalidated
+	// Must happen BEFORE building the query
+	if args.Status == "invalidated" {
+		args.IncludeInvalidated = true
+	}
+
 	q := recall.RecallQuery{
-		Files:            args.Files,
-		Tags:             args.Tags,
-		Query:            args.Query,
-		RepoID:           args.Repo,
-		IncludeEvolution: args.IncludeEvolution,
+		Files:              args.Files,
+		Tags:               args.Tags,
+		Query:              args.Query,
+		RepoID:             args.Repo,
+		IncludeEvolution:   args.IncludeEvolution,
+		IncludeInvalidated: args.IncludeInvalidated,
 	}
 
 	// If repo specified, get the local path for git correlation
@@ -275,7 +305,7 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		return nil, out, nil
 	}
 
-	// Filter by status if specified
+	// Filter by status if specified (for post-query filtering)
 	var statusFilter *capsule.CapsuleStatus
 	if args.Status != "" {
 		status := capsule.CapsuleStatus(args.Status)
@@ -340,9 +370,9 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		})
 	}
 
-	// Add hint about quickfix when results are found
+	// Add deprecation notice
 	if len(out.Capsules) > 0 {
-		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead. Tip: If you discover something that needs fixing, use card_quickfix_start to create a recorded quickfix session."
+		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead. Tip: If you discover something that needs fixing, use card_promote_to_session to create a recorded session."
 	} else if out.Message == "" {
 		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead."
 	} else {
@@ -535,7 +565,7 @@ func (s *Server) handleSessionArtifacts(ctx context.Context, req *mcp.CallToolRe
 	if out.MilestoneLedger == "" && out.ExecutionLog == "" && out.VerificationNotes == "" {
 		out.Message = "No artifacts found for this session. The session may not have progressed through those phases yet."
 	} else if out.MilestoneLedger != "" && out.ExecutionLog == "" && sess.Status == session.StatusCompleted {
-		out.Message = "Session completed. Execution logs are ephemeral and cleaned up after completion. The milestone_ledger contains the file manifest, patterns, and iteration summary. Use card_recall for queryable decisions."
+		out.Message = "Session completed. Execution logs are ephemeral and cleaned up after completion. The milestone_ledger contains the file manifest, patterns, and iteration summary. Use card_query(target='decisions') for queryable decisions."
 	}
 
 	return nil, out, nil
@@ -614,7 +644,7 @@ func (s *Server) handleSessionExecutionHistory(ctx context.Context, req *mcp.Cal
 
 	if len(out.Attempts) == 0 {
 		if sess.Status == session.StatusCompleted {
-			out.Message = "Session completed. Execution logs are ephemeral and cleaned up after completion. Iteration history is preserved in session.yaml (ExecutionHistory field) and summarized in milestone_ledger.md. Use card_recall for queryable decisions."
+			out.Message = "Session completed. Execution logs are ephemeral and cleaned up after completion. Iteration history is preserved in session.yaml (ExecutionHistory field) and summarized in milestone_ledger.md. Use card_query(target='decisions') for queryable decisions."
 		} else {
 			out.Message = "No execution history found. The session may not have reached the execution phase yet."
 		}
@@ -650,115 +680,125 @@ func (s *Server) handleTagsList(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, out, nil
 }
 
-// QuickfixStartArgs defines input for card_quickfix_start.
-type QuickfixStartArgs struct {
-	UserConfirmed bool               `json:"user_confirmed" jsonschema:"REQUIRED. Set true ONLY after explicitly asking the user and receiving approval. You MUST explain what a quickfix session is before asking."`
-	Description   string             `json:"description" jsonschema:"Brief description of the quickfix work (e.g., 'Fix IDOR in notification endpoints')"`
-	Repos         []string           `json:"repos" jsonschema:"Repository IDs involved in this fix"`
-	Context       string             `json:"context" jsonschema:"Discovery context - how this issue was found, why it matters, relevant prior decisions"`
-	Decisions     []QuickfixDecision `json:"decisions,omitempty" jsonschema:"Pre-identified decisions to seed the session capsules"`
+// PromoteToSessionArgs defines input for card_promote_to_session.
+type PromoteToSessionArgs struct {
+	UserConfirmed bool   `json:"user_confirmed" jsonschema:"REQUIRED. Set true ONLY after explicitly asking the user and receiving approval."`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"Ask session ID to promote (optional - uses current ask session if not provided)"`
+	Description   string `json:"description,omitempty" jsonschema:"Override session description (optional)"`
+	StartPhase    string `json:"start_phase" jsonschema:"Phase to start: 'investigate', 'plan' (default), or 'execute'"`
+	Context       string `json:"context,omitempty" jsonschema:"Context from ask conversation to seed the session (used as investigation context)"`
 }
 
-// QuickfixDecision represents a decision to seed into the quickfix session.
-type QuickfixDecision struct {
-	Question     string   `json:"question" jsonschema:"What was being decided"`
-	Choice       string   `json:"choice" jsonschema:"What was chosen"`
-	Alternatives []string `json:"alternatives,omitempty" jsonschema:"Options considered"`
-	Rationale    string   `json:"rationale" jsonschema:"Why this choice"`
-	Tags         []string `json:"tags,omitempty" jsonschema:"File paths, concepts, domains"`
-	Source       string   `json:"source,omitempty" jsonschema:"'human' or 'agent' (default: agent)"`
-}
-
-// QuickfixStartResult is the output of card_quickfix_start.
-type QuickfixStartResult struct {
+// PromoteToSessionResult is the output of card_promote_to_session.
+type PromoteToSessionResult struct {
 	SessionID string `json:"session_id"`
 	Status    string `json:"status"`
 	Message   string `json:"message"`
 	NextSteps string `json:"next_steps"`
 }
 
-func (s *Server) handleQuickfixStart(ctx context.Context, req *mcp.CallToolRequest, args QuickfixStartArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handlePromoteToSession(ctx context.Context, req *mcp.CallToolRequest, args PromoteToSessionArgs) (*mcp.CallToolResult, any, error) {
 	if !args.UserConfirmed {
-		return nil, nil, fmt.Errorf("user_confirmed must be true - you must ask the user for permission before creating a quickfix session")
-	}
-	if args.Description == "" {
-		return nil, nil, fmt.Errorf("description is required")
-	}
-	if len(args.Repos) == 0 {
-		return nil, nil, fmt.Errorf("at least one repo is required")
+		return nil, nil, fmt.Errorf("user_confirmed must be true - you must ask the user for permission before promoting to a session")
 	}
 
-	// Validate repos exist
-	for _, repoID := range args.Repos {
-		if _, err := repo.Get(s.store, repoID); err != nil {
-			return nil, nil, fmt.Errorf("repo not found: %s", repoID)
+	// Find the ask session to promote
+	sessionID := args.SessionID
+	if sessionID == "" {
+		// Find most recent ask session
+		activeSessions, err := session.GetActive(s.store)
+		if err != nil || len(activeSessions) == 0 {
+			return nil, nil, fmt.Errorf("no active session to promote - record a decision first to create an ask session")
+		}
+		// Find the most recent ask session
+		for _, sess := range activeSessions {
+			if sess.Mode == session.ModeAsk {
+				sessionID = sess.ID
+				break
+			}
+		}
+		if sessionID == "" {
+			return nil, nil, fmt.Errorf("no ask session found to promote")
 		}
 	}
 
-	// Create quickfix session
-	sess, err := session.CreateQuickfix(s.store, args.Description, args.Repos, args.Context)
+	// Get the session
+	sess, err := session.Get(s.store, sessionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create quickfix session: %w", err)
+		return nil, nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 
-	// Create change records for each repo (track base commit)
-	for _, repoID := range args.Repos {
+	if sess.Mode != session.ModeAsk {
+		return nil, nil, fmt.Errorf("session %s is not an ask session (mode: %s)", sessionID, sess.Mode)
+	}
+
+	// Update description if provided
+	if args.Description != "" {
+		if err := session.UpdateDescription(s.store, sessionID, args.Description); err != nil {
+			return nil, nil, fmt.Errorf("failed to update description: %w", err)
+		}
+	}
+
+	// Store context as investigation summary if provided
+	if args.Context != "" {
+		contextPath := s.store.Path("sessions", sessionID, "investigation_summary.md")
+		content := fmt.Sprintf(`---
+session: %s
+phase: investigate
+timestamp: %s
+status: complete
+---
+
+# Investigation Summary (from Ask Conversation)
+
+%s
+`, sessionID, time.Now().UTC().Format(time.RFC3339), args.Context)
+		if err := os.WriteFile(contextPath, []byte(content), 0644); err != nil {
+			// Log but don't fail - context is optional
+		}
+	}
+
+	// Promote the session
+	startPhase := args.StartPhase
+	if startPhase == "" {
+		startPhase = "plan"
+	}
+	if err := session.PromoteToStandard(s.store, sessionID, startPhase); err != nil {
+		return nil, nil, fmt.Errorf("failed to promote session: %w", err)
+	}
+
+	// Get updated session
+	sess, _ = session.Get(s.store, sessionID)
+
+	// Create change records for each repo if not already created
+	for _, repoID := range sess.Repos {
 		if _, err := change.Create(s.store, sess.ID, repoID); err != nil {
-			// Log but don't fail - change tracking is secondary
+			// Ignore errors - change record may already exist
 			continue
 		}
 	}
 
-	// Seed pre-identified decisions as capsules
-	if len(args.Decisions) > 0 {
-		for _, d := range args.Decisions {
-			source := d.Source
-			if source == "" {
-				source = "agent"
-			}
-			c := capsule.Capsule{
-				SessionID:    sess.ID,
-				RepoIDs:      args.Repos,
-				Phase:        "quickfix-seed",
-				Timestamp:    time.Now().UTC(),
-				Question:     d.Question,
-				Choice:       d.Choice,
-				Alternatives: d.Alternatives,
-				Rationale:    d.Rationale,
-				Tags:         d.Tags,
-				Source:       source,
-			}
-			c.ID = capsule.GenerateID(sess.ID, c.Phase, c.Question)
-
-			if err := capsule.Store(s.store, c); err != nil {
-				// Log but don't fail - seeding is optional
-				continue
-			}
-		}
-	}
-
-	out := QuickfixStartResult{
+	out := PromoteToSessionResult{
 		SessionID: sess.ID,
 		Status:    string(sess.Status),
-		Message:   fmt.Sprintf("Quickfix session '%s' created and ready for execution.", sess.ID),
+		Message:   fmt.Sprintf("Session '%s' promoted to standard mode, starting at %s phase.", sess.ID, startPhase),
 		NextSteps: fmt.Sprintf(`
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  QUICKFIX SESSION READY
+  SESSION PROMOTED
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   Session: %s
+  Starting at: %s phase
 
-  To execute the fix:
+  To continue:
 
   1. Exit this ask session (Ctrl+C)
   2. Run:  card session resume %s
 
-  The session will start at the Execute phase with your
-  discovery context preserved. After implementation,
-  it runs Verify → Record to capture the decision.
+  Decisions recorded during ask have been preserved.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`, sess.ID, sess.ID),
+`, sess.ID, startPhase, sess.ID),
 	}
 
 	return nil, out, nil
@@ -766,7 +806,7 @@ func (s *Server) handleQuickfixStart(ctx context.Context, req *mcp.CallToolReque
 
 // RecordArgs defines input for card_record.
 type RecordArgs struct {
-	SessionID    string   `json:"session_id,omitempty" jsonschema:"Session ID to record to (optional - finds active session if not provided)"`
+	SessionID    string   `json:"session_id,omitempty" jsonschema:"Session ID to record to (optional - finds active session or creates ask session if not provided)"`
 	Type         string   `json:"type" jsonschema:"Type of record: 'decision' (has alternatives) or 'finding' (observation/conclusion)"`
 	Question     string   `json:"question" jsonschema:"What was being decided or investigated"`
 	Choice       string   `json:"choice" jsonschema:"What was chosen or concluded"`
@@ -795,6 +835,7 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 	// Find session
 	var sess *session.Session
 	var err error
+	var createdAskSession bool
 
 	if args.SessionID != "" {
 		sess, err = session.Get(s.store, args.SessionID)
@@ -805,9 +846,20 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 		// Find most recent active session
 		active, err := session.GetActive(s.store)
 		if err != nil || len(active) == 0 {
-			return nil, nil, fmt.Errorf("no active session found - use card_quickfix_start to create one, or provide session_id")
+			// No active session — create an ask session lazily
+			// Try to detect repo from working directory
+			repoID := s.detectCurrentRepo()
+			if repoID == "" {
+				return nil, nil, fmt.Errorf("no active session and no repo context — run from a registered repo directory or provide session_id")
+			}
+			sess, err = session.CreateAsk(s.store, "Ask session", []string{repoID})
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create ask session: %w", err)
+			}
+			createdAskSession = true
+		} else {
+			sess = &active[0]
 		}
-		sess = &active[0]
 	}
 
 	// Determine type
@@ -846,11 +898,18 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 		return nil, nil, fmt.Errorf("failed to store capsule: %w", err)
 	}
 
+	message := fmt.Sprintf("Decision recorded as %s (status: %s).", c.ID, c.Status)
+	if createdAskSession {
+		message += " Ask session created. Use card_promote_to_session when ready for implementation."
+	} else {
+		message += " Will be verified when session completes."
+	}
+
 	out := RecordResult{
 		CapsuleID: c.ID,
 		SessionID: sess.ID,
 		Status:    string(c.Status),
-		Message:   fmt.Sprintf("Decision recorded as %s (status: %s). Will be verified when session completes.", c.ID, c.Status),
+		Message:   message,
 	}
 
 	return nil, out, nil
@@ -1497,7 +1556,7 @@ func extractPatternsFromLedger(content string) []Pattern {
 	// Look for "## Implementation Patterns" or "## Patterns" section
 	lines := strings.Split(content, "\n")
 	inPatternSection := false
-	var currentPattern *Pattern
+	lastPatternIdx := -1 // Track last pattern for description continuation
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -1519,12 +1578,10 @@ func extractPatternsFromLedger(content string) []Pattern {
 
 		// Parse pattern entries (### or - ** format)
 		if strings.HasPrefix(trimmed, "### ") {
-			if currentPattern != nil {
-				patterns = append(patterns, *currentPattern)
-			}
-			currentPattern = &Pattern{
+			patterns = append(patterns, Pattern{
 				Name: strings.TrimPrefix(trimmed, "### "),
-			}
+			})
+			lastPatternIdx = len(patterns) - 1
 		} else if strings.HasPrefix(trimmed, "- **") || strings.HasPrefix(trimmed, "* **") {
 			// Pattern in list format: - **Pattern Name:** Description
 			if idx := strings.Index(trimmed, ":**"); idx != -1 {
@@ -1535,19 +1592,16 @@ func extractPatternsFromLedger(content string) []Pattern {
 					Name:        name,
 					Description: desc,
 				})
+				lastPatternIdx = len(patterns) - 1
 			}
-		} else if currentPattern != nil && trimmed != "" && !strings.HasPrefix(trimmed, "-") {
-			// Description for current pattern
-			if currentPattern.Description == "" {
-				currentPattern.Description = trimmed
+		} else if lastPatternIdx >= 0 && trimmed != "" && !strings.HasPrefix(trimmed, "- **") && !strings.HasPrefix(trimmed, "* **") {
+			// Description continuation for the last pattern (handles multi-line descriptions)
+			if patterns[lastPatternIdx].Description == "" {
+				patterns[lastPatternIdx].Description = trimmed
 			} else {
-				currentPattern.Description += " " + trimmed
+				patterns[lastPatternIdx].Description += " " + trimmed
 			}
 		}
-	}
-
-	if currentPattern != nil {
-		patterns = append(patterns, *currentPattern)
 	}
 
 	return patterns
@@ -1838,24 +1892,23 @@ Understanding what persists is critical for querying sessions effectively:
 - implementation_guide.md — The plan that was executed
 
 **What this means for queries:**
-- For COMPLETED sessions: Use card_recall for decisions, card_session_artifacts for milestone_ledger
-- For ACTIVE sessions: card_session_artifacts returns execution_log and verification_notes too
+- For COMPLETED sessions: Use card_query(target='decisions') for decisions, card_session_ops(operation='artifacts') for milestone_ledger
+- For ACTIVE sessions: card_session_ops(operation='artifacts') returns execution_log and verification_notes too
 - Don't expect execution logs for old sessions — the decisions and file manifest capture what matters
 
 ## When to Call CARD Tools
 
 ### Before Reading/Editing Files
-- Call card_file_context(files) BEFORE reading or editing any file
+- Call card_context(mode='before_edit', files=[...]) BEFORE reading or editing any file
 - If decisions exist, summarize them proactively to the user
 - Example: "I see there are 3 prior decisions about this file, including..."
 
 ### At Start of Any Task
-- Call card_recall() with no params to see the 15 most recent decisions
-- Call card_preflight(files, intent) before implementing anything
+- Call card_context(mode='starting_task') to get recent decisions + patterns + hotspots
 - Mention relevant patterns: "This codebase uses X pattern for Y"
 
 ### When User Mentions a Topic
-- If user says "authentication", call card_recall(tags: ["auth"])
+- If user says "authentication", call card_query(target='decisions', tags=['auth'])
 - Synonym matching is built-in: "auth" finds "authentication", "login", etc.
 
 ### Before Proposing Changes
@@ -1877,7 +1930,7 @@ I'll follow these patterns in my implementation."
 
 ## Recording Decisions
 - Use card_record() to capture significant decisions mid-task
-- Use card_quickfix_start() when you discover something fixable during exploration
+- Use card_promote_to_session() when the conversation needs tracked implementation work
 
 ## Summary
 1. Check context BEFORE touching files
@@ -2124,7 +2177,7 @@ type DecisionArgs struct {
 	Origin              string   `json:"origin,omitempty" jsonschema:"'human' or 'agent' (default: agent)"`
 	Significance        string   `json:"significance" jsonschema:"'architectural', 'implementation', or 'context'"`
 	RequireConfirmation bool     `json:"require_confirmation" jsonschema:"If true, returns proposal for human review; if false, stores immediately"`
-	SessionID           string   `json:"session_id,omitempty" jsonschema:"Session ID (optional - finds active session if not provided)"`
+	SessionID           string   `json:"session_id,omitempty" jsonschema:"Session ID (optional - finds active session or creates ask session if not provided)"`
 	EnabledBy           string   `json:"enabled_by,omitempty" jsonschema:"Capsule ID that enabled this decision (for dependency graph)"`
 	Type                string   `json:"type,omitempty" jsonschema:"'decision' (has alternatives) or 'finding' (observation). Default: inferred from alternatives"`
 }
@@ -2168,19 +2221,35 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 
 	// Find session
 	sessionID := args.SessionID
-	if sessionID == "" {
-		// Find most recent active session
+	var sess *session.Session
+	var err error
+	var createdAskSession bool
+
+	if sessionID != "" {
+		sess, err = session.Get(s.store, sessionID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("session not found: %s", sessionID)
+		}
+		sessionID = sess.ID
+	} else {
+		// Find most recent active session, or create ask session lazily
 		activeSessions, err := session.GetActive(s.store)
 		if err != nil || len(activeSessions) == 0 {
-			return nil, nil, fmt.Errorf("no active session found; provide session_id or start a session first")
+			// No active session — create an ask session lazily
+			repoID := s.detectCurrentRepo()
+			if repoID == "" {
+				return nil, nil, fmt.Errorf("no active session and no repo context — run from a registered repo directory or provide session_id")
+			}
+			sess, err = session.CreateAsk(s.store, "Ask session", []string{repoID})
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to create ask session: %w", err)
+			}
+			sessionID = sess.ID
+			createdAskSession = true
+		} else {
+			sess = &activeSessions[0]
+			sessionID = sess.ID
 		}
-		sessionID = activeSessions[0].ID // Use most recent active session
-	}
-
-	// Verify session exists
-	sess, err := session.Get(s.store, sessionID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("session not found: %s", sessionID)
 	}
 
 	// Determine origin
@@ -2274,13 +2343,18 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 		// Store proposal
 		proposalID := s.proposals.Create(proposal)
 
+		message := "Decision proposal created. Present similar/contradicting decisions to user and call card_decision_confirm with their choice."
+		if createdAskSession {
+			message += " (Ask session created - use card_promote_to_session when ready for implementation.)"
+		}
+
 		return nil, DecisionResult{
 			ProposalID:           proposalID,
 			SimilarExisting:      proposal.SimilarExisting,
 			Contradicts:          proposal.Contradicts,
 			SuggestedAction:      proposal.SuggestedAction,
 			AwaitingConfirmation: true,
-			Message:              "Decision proposal created. Present similar/contradicting decisions to user and call card_decision_confirm with their choice.",
+			Message:              message,
 		}, nil
 	}
 
@@ -2298,10 +2372,15 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 		return nil, nil, fmt.Errorf("failed to store decision: %w", err)
 	}
 
+	message := fmt.Sprintf("Decision stored: %s", c.ID)
+	if createdAskSession {
+		message += " (Ask session created - use card_promote_to_session when ready for implementation.)"
+	}
+
 	return nil, DecisionResult{
 		CapsuleID:      c.ID,
 		SimilarWarning: similarWarning,
-		Message:        fmt.Sprintf("Decision stored: %s", c.ID),
+		Message:        message,
 	}, nil
 }
 
@@ -2636,7 +2715,10 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest, args
 		}
 		if rr, ok := recallRes.(RecallResult); ok {
 			out.Capsules = rr.Capsules
-			out.Message = rr.Message
+			// Don't copy the deprecation message from handleRecall - card_query is the non-deprecated API
+			if len(out.Capsules) == 0 {
+				out.Message = "No decisions found matching query."
+			}
 		}
 
 	case "sessions":

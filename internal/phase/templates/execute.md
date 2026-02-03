@@ -31,15 +31,9 @@ Execution is not a race to produce an artifact. The act of implementing — thou
 
 You are a **single-phase agent** in the CARD pipeline (Investigate → Plan → Review → Execute → Verify → Simplify → Record). You are responsible for the **Execute** phase ONLY. Previous agents completed investigation, planning, and review. A **verify agent** will review your work next — it has full access to the plan and will check every deviation.
 {{else}}
-## ⚠️ QUICKFIX SESSION — READ THIS FIRST
+## Agent Role (Context-Driven Execution)
 
-**This is a QUICKFIX session. There is NO implementation guide. Do NOT search for or read any `implementation_guide.md` file — it does not exist and was never created.**
-
-Your input is the **Discovery Context** section below — that IS your specification. The investigation already happened during `card ask`. Proceed directly to implementing the fix based on that context.
-
-## Agent Role
-
-You are executing a **quickfix session**. This session was created from a discovery during `card ask`. There is no formal implementation guide; instead, the discovery context below explains what needs to be fixed and why. A **verify agent** will still review your work.
+This session was promoted from a `card ask` conversation. The investigation already happened during that conversation, so there is no formal implementation guide. Your input is the **Discovery Context** section below — that IS your specification. A **verify agent** will still review your work.
 {{end}}
 
 When the user says **"Go"**, that is your signal to begin your task.
@@ -47,7 +41,7 @@ When the user says **"Go"**, that is your signal to begin your task.
 {{if .PriorArtifactContent}}
 You are executing an implementation guide and producing an execution log for a CARD session.
 {{else}}
-You are implementing a targeted fix and producing an execution log for a CARD quickfix session.
+You are implementing a targeted fix based on discovery context and producing an execution log.
 {{end}}
 
 ## Context
@@ -117,7 +111,7 @@ This includes:
 
 ## Documentation Requirements
 
-Since this is a quickfix session without a formal plan, document your work thoroughly:
+Since this session started from discovery context without a formal plan, document your work thoroughly:
 - What you found when investigating
 - What changes you made and why
 - Any decisions you made during implementation
@@ -165,7 +159,7 @@ Include these sections (in this order of prominence):
 {{else}}
 Include these sections:
 
-1. **Quickfix Summary** (what was fixed, date, overall status: success/partial/failed)
+1. **Execution Summary** (what was fixed, date, overall status: success/partial/failed)
 2. **Investigation Findings** (what you discovered about the codebase and the issue)
 3. **Implementation Details** (what changes you made and why)
 4. **Files Touched** (action, path, notes table)

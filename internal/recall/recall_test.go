@@ -62,7 +62,7 @@ func TestByFiles_ExactMatch(t *testing.T) {
 		Timestamp: time.Now(),
 	})
 
-	result, err := ByFiles(st, "repo-a", []string{"src/auth.ts"}, true)
+	result, err := ByFiles(st, "repo-a", []string{"src/auth.ts"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestByFiles_DirectoryMatch(t *testing.T) {
 	})
 
 	// Query for directory should match file inside it
-	result, err := ByFiles(st, "repo-a", []string{"src/auth"}, true)
+	result, err := ByFiles(st, "repo-a", []string{"src/auth"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestByFiles_NoMatch(t *testing.T) {
 		Timestamp: time.Now(),
 	})
 
-	result, err := ByFiles(st, "repo-a", []string{"src/database.ts"}, true)
+	result, err := ByFiles(st, "repo-a", []string{"src/database.ts"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestByRepo(t *testing.T) {
 		Timestamp: time.Now(),
 	})
 
-	result, err := ByRepo(st, "repo-a", true)
+	result, err := ByRepo(st, "repo-a", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestByTags(t *testing.T) {
 	})
 
 	// Partial match
-	result, err := ByTags(st, []string{"auth"}, true)
+	result, err := ByTags(st, []string{"auth"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestByTags(t *testing.T) {
 	}
 
 	// Exact match
-	result, err = ByTags(st, []string{"security"}, true)
+	result, err = ByTags(st, []string{"security"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestByTags_CaseInsensitive(t *testing.T) {
 		Timestamp: time.Now(),
 	})
 
-	result, err := ByTags(st, []string{"authentication"}, true)
+	result, err := ByTags(st, []string{"authentication"}, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

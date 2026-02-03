@@ -124,7 +124,7 @@ Key architectural decisions:
 Full decision history: ~/.card/sessions/{{.SessionID}}/capsules.md
 ```
 
-Use `card_recall` with `session_id: "{{.SessionID}}"` to get the full list of decisions for this session.
+Use `card_session_ops` with `session_id: "{{.SessionID}}"` and `operation: "review"` to get the full list of decisions for this session.
 
 After writing the artifact, signal phase completion:
 

@@ -464,8 +464,10 @@ func printSessionDetail(s *store.Store, sess *session.Session) {
 	ui.SectionHeader(sess.ID)
 	ui.KeyValue("Description:", sess.Description)
 	ui.KeyValue("Status:     ", statusStr)
-	if sess.Mode == session.ModeQuickfix {
-		ui.KeyValue("Mode:       ", ui.Bold("quickfix")+" (Execute → Verify → Record)")
+	if sess.Mode == session.ModeAsk {
+		ui.KeyValue("Mode:       ", ui.Bold("ask")+" (conversational, no phases)")
+	} else if sess.Mode == session.ModeResearch {
+		ui.KeyValue("Mode:       ", ui.Bold("research")+" (Investigate → Conclude → Record)")
 	}
 	ui.KeyValue("Created:    ", sess.CreatedAt.Format("2006-01-02 15:04:05"))
 	ui.KeyValue("Updated:    ", sess.UpdatedAt.Format("2006-01-02 15:04:05"))
@@ -2147,33 +2149,36 @@ func buildAskSystemPrompt(repoID, workDir string, bootstrap *askBootstrapContext
 	b.WriteString("- Mention prior decisions that relate to what's being discussed\n")
 	b.WriteString("- Warn if a proposal conflicts with established patterns\n")
 	b.WriteString("- Reference specific sessions when explaining history\n")
-	b.WriteString("- Offer to create quickfix sessions when you discover issues\n\n")
+	b.WriteString("- Record decisions as you make them during conversation\n")
+	b.WriteString("- Offer to promote to a session when implementation work is needed\n\n")
 
 	// === Tool Guidance (Tiered) ===
 	b.WriteString("## CARD Tools\n\n")
 
-	b.WriteString("**Start Here — Core Tools:**\n")
-	b.WriteString("- `card_recall`: Search decisions by files, tags, or keywords. Call with NO PARAMS to get recent decisions.\n")
-	b.WriteString("- `card_preflight(files, intent)`: Pre-work briefing before touching files. Combines context + patterns.\n")
-	b.WriteString("- `card_file_context(files)`: Get all decisions related to specific files.\n\n")
+	b.WriteString("**Context & Query — Core Tools:**\n")
+	b.WriteString("- `card_context(mode='starting_task')`: Get recent decisions + patterns + hotspots for general awareness\n")
+	b.WriteString("- `card_context(mode='before_edit', files=[...])`: Get file-specific decisions before editing\n")
+	b.WriteString("- `card_query(target='decisions')`: Search decisions by files, tags, or keywords\n\n")
 
 	b.WriteString("**Deep Dive — When You Need More:**\n")
-	b.WriteString("- `card_capsule_show(id)`: Full details of a specific decision\n")
-	b.WriteString("- `card_sessions`: List all work sessions\n")
-	b.WriteString("- `card_session_summary(id)`: Quick catch-up on a session\n")
-	b.WriteString("- `card_session_artifacts(id)`: Full execution logs and plans (can be 500+ lines)\n")
-	b.WriteString("- `card_patterns`: Established implementation patterns in this codebase\n")
-	b.WriteString("- `card_hotspots`: Find areas with most decisions (context-rich vs sparse)\n\n")
+	b.WriteString("- `card_capsule_ops(id, operation='show')`: Full details of a specific decision\n")
+	b.WriteString("- `card_query(target='sessions')`: List all work sessions\n")
+	b.WriteString("- `card_session_ops(session_id, operation='summary')`: Quick catch-up on a session\n")
+	b.WriteString("- `card_session_ops(session_id, operation='artifacts')`: Full execution logs and plans\n")
+	b.WriteString("- `card_query(target='patterns')`: Established implementation patterns in this codebase\n")
+	b.WriteString("- `card_query(target='hotspots')`: Find areas with most decisions (context-rich vs sparse)\n\n")
 
 	b.WriteString("**Recording & Capture:**\n")
-	b.WriteString("- `card_record`: Capture a decision mid-conversation (survives session crashes)\n")
-	b.WriteString("- `card_quickfix_start`: Promote a discovered issue to a recorded fix session\n\n")
+	b.WriteString("- `card_record`: Capture a decision mid-conversation (creates ask session automatically if needed)\n")
+	b.WriteString("- `card_decision`: Record a decision with significance tier and optional confirmation\n")
+	b.WriteString("- `card_promote_to_session`: Promote this ask conversation to a full CARD session for implementation\n\n")
 
-	// === Quickfix Guidance ===
-	b.WriteString("## Quickfix Sessions\n\n")
-	b.WriteString("If you discover something fixable (bug, security issue, inconsistency), proactively offer to create a quickfix session. ")
-	b.WriteString("This records the fix with decision capture while skipping investigation/planning (since you've already done that discovery together). ")
-	b.WriteString("Don't wait for the user to ask — if you find something, offer it.\n\n")
+	// === Ask Session Guidance ===
+	b.WriteString("## Decision Recording\n\n")
+	b.WriteString("When you make decisions during this conversation, record them using `card_record` or `card_decision`. ")
+	b.WriteString("This creates an 'ask session' automatically to store the decisions. ")
+	b.WriteString("If the conversation evolves into something that needs tracked implementation work, ")
+	b.WriteString("use `card_promote_to_session` to convert to a full session.\n\n")
 
 	// === Bootstrapped Context ===
 	b.WriteString("## Current Context\n\n")
@@ -2206,7 +2211,7 @@ func buildAskSystemPrompt(repoID, workDir string, bootstrap *askBootstrapContext
 		b.WriteString("These are the most recent decisions in this codebase. Reference them when relevant:\n\n")
 		for i, cap := range bootstrap.RecentDecisions {
 			if i >= 10 { // Limit to 10 in preamble
-				b.WriteString(fmt.Sprintf("... and %d more (use `card_recall` to explore)\n", len(bootstrap.RecentDecisions)-10))
+				b.WriteString(fmt.Sprintf("... and %d more (use `card_query(target='decisions')` to explore)\n", len(bootstrap.RecentDecisions)-10))
 				break
 			}
 			b.WriteString(fmt.Sprintf("- **%s** → %s", cap.Question, cap.Choice))

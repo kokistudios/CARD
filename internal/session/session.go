@@ -25,7 +25,7 @@ type SessionMode string
 
 const (
 	ModeStandard SessionMode = "standard" // Full 7-phase pipeline
-	ModeQuickfix SessionMode = "quickfix" // Execute → Verify → Record
+	ModeAsk      SessionMode = "ask"      // Conversational, no phases (can be promoted)
 	ModeResearch SessionMode = "research" // Investigate → Conclude → Record
 )
 
@@ -58,7 +58,7 @@ type Session struct {
 	ID             string        `yaml:"id"`
 	Description    string        `yaml:"description"`
 	Context        string        `yaml:"context"`        // operator-provided context (from --context flag, required)
-	Mode           SessionMode   `yaml:"mode,omitempty"` // session mode: standard, quickfix, or research
+	Mode           SessionMode   `yaml:"mode,omitempty"` // session mode: standard, ask, or research
 	Status         SessionStatus `yaml:"status"`
 	PreviousStatus SessionStatus `yaml:"previous_status,omitempty"` // stored when paused
 	Repos          []string      `yaml:"repos"`
@@ -175,7 +175,7 @@ func WithContext(ctx string) CreateOption {
 	}
 }
 
-// WithMode sets the session mode (standard or quickfix).
+// WithMode sets the session mode (standard, ask, or research).
 func WithMode(mode SessionMode) CreateOption {
 	return func(o *createOptions) {
 		o.mode = mode
@@ -238,26 +238,54 @@ func Create(s *store.Store, description string, repoIDs []string, opts ...Create
 	return sess, nil
 }
 
-// CreateQuickfix creates a session that skips investigate/plan/review phases.
-// It starts at StatusApproved, ready for the execute phase.
-// Use this when promoting a discovery from card ask into a recorded session.
-func CreateQuickfix(s *store.Store, description string, repoIDs []string, context string) (*Session, error) {
-	sess, err := Create(s, description, repoIDs,
-		WithMode(ModeQuickfix),
-		WithContext(context),
-	)
+// CreateAsk creates a lightweight ask session for conversational decision capture.
+// Ask sessions have no phases — they're containers for decisions made during card ask.
+// Use PromoteToStandard to convert an ask session into a standard session when implementation is needed.
+func CreateAsk(s *store.Store, description string, repoIDs []string) (*Session, error) {
+	return Create(s, description, repoIDs, WithMode(ModeAsk))
+}
+
+// PromoteToStandard converts an ask session into a standard session for implementation work.
+// startPhase determines where the session begins: "investigate", "plan", or "execute".
+// - "investigate": Full pipeline, ask context seeds investigation
+// - "plan": Skip investigation, start at planning (most common — investigation happened in ask)
+// - "execute": Skip to execution (rare, for trivial changes)
+func PromoteToStandard(s *store.Store, sessionID string, startPhase string) error {
+	sess, err := Get(s, sessionID)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if sess.Mode != ModeAsk {
+		return fmt.Errorf("only ask sessions can be promoted (session %s has mode %s)", sessionID, sess.Mode)
 	}
 
-	// Quickfix sessions start ready to execute (skip investigate/plan/review)
-	sess.Status = StatusApproved
+	sess.Mode = ModeStandard
+
+	// Set status based on start phase
+	switch startPhase {
+	case "plan":
+		// Start at investigating — orchestrator will transition to planning after loading context
+		sess.Status = StatusInvestigating
+	case "execute":
+		// Skip to approved, ready for execute phase
+		sess.Status = StatusApproved
+	default: // "investigate" or empty
+		sess.Status = StatusStarted
+	}
+
 	sess.UpdatedAt = time.Now().UTC()
-	if err := save(s, sess); err != nil {
-		return nil, err
-	}
+	return save(s, sess)
+}
 
-	return sess, nil
+// UpdateDescription updates a session's description.
+func UpdateDescription(s *store.Store, sessionID string, description string) error {
+	sess, err := Get(s, sessionID)
+	if err != nil {
+		return err
+	}
+	sess.Description = description
+	sess.UpdatedAt = time.Now().UTC()
+	return save(s, sess)
 }
 
 // Transition moves a session to a new status.

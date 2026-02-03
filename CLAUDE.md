@@ -25,13 +25,26 @@ In session mode, each phase runs as a **separate Claude Code invocation** with s
 
 ### MCP Server
 CARD includes an MCP server (`internal/mcp/server.go`) that exposes tools for Claude to query engineering memory:
-- `card_recall` — Search decisions by files, tags, keywords
-- `card_file_context` — Get decisions related to specific files
-- `card_preflight` — Pre-flight briefing before implementation
-- `card_record` — Record a decision mid-session
-- `card_quickfix_start` — Create a quickfix session from discovery
-- `card_invalidate` — Mark a decision as invalidated with reasoning
-- Plus: `card_sessions`, `card_capsule_show`, `card_hotspots`, `card_patterns`, etc.
+
+**Context & Query:**
+- `card_context` — Unified pre-work context (modes: starting_task, before_edit, reviewing_pr)
+- `card_query` — Search decisions, sessions, patterns, hotspots, learnings, tags
+- `card_snapshot` — Query decision state at a point in time
+
+**Recording:**
+- `card_record` — Record a decision immediately (creates ask session automatically if needed)
+- `card_decision` — Record decision with significance tier and optional human confirmation
+- `card_decision_confirm` — Confirm or supersede a proposed architectural decision
+
+**Operations:**
+- `card_session_ops` — Session operations (summary, artifacts, history, review, dedupe)
+- `card_capsule_ops` — Capsule operations (show, chain, invalidate, graph)
+- `card_promote_to_session` — Promote ask conversation to full session for implementation
+
+**Phase Management:**
+- `card_write_artifact` — Write phase artifacts to the correct location
+- `card_phase_complete` — Signal phase completion for automatic advancement
+- `card_agent_guidance` — Get guidance on proactive CARD usage
 
 ## Architecture
 
@@ -81,7 +94,9 @@ started → investigating → planning → reviewing → approved → executing 
                                                                ↑           │
                                                                └───────────┘ (re-execute)
 ```
-Additional states: `paused`, `abandoned`, `quickfix_executing` (for quickfix mode)
+Additional states: `paused`, `abandoned`
+
+**Ask Sessions:** `card ask` can create lightweight "ask sessions" (ModeAsk) when decisions are recorded. These can be promoted to standard sessions via `card_promote_to_session`.
 
 ### CARD_HOME Layout
 ```
@@ -125,9 +140,9 @@ CARD artifacts have different lifespans by design:
 - Keeps `~/.card/` from growing unboundedly
 
 **For MCP tool queries:**
-- Completed sessions: `card_session_artifacts` returns only `milestone_ledger`
-- Active sessions: `card_session_artifacts` returns all artifacts including execution logs
-- Use `card_recall` for decisions — they're always available
+- Completed sessions: `card_session_ops` (operation='artifacts') returns only `milestone_ledger`
+- Active sessions: `card_session_ops` returns all artifacts including execution logs
+- Use `card_query` (target='decisions') for decisions — they're always available
 
 ### Decision Capsule Structure
 ```yaml

@@ -23,10 +23,11 @@ func Sequence() []Phase {
 	return []Phase{PhaseInvestigate, PhasePlan, PhaseReview, PhaseExecute, PhaseVerify, PhaseSimplify, PhaseRecord}
 }
 
-// QuickfixSequence returns the phases for quickfix sessions.
-// Skips investigate/plan/review - goes straight to execute.
-func QuickfixSequence() []Phase {
-	return []Phase{PhaseExecute, PhaseVerify, PhaseSimplify, PhaseRecord}
+// AskSequence returns the phases for ask sessions.
+// Ask sessions are conversational and have no phases — decisions are recorded directly.
+// Use session.PromoteToStandard() to convert an ask session to a standard session.
+func AskSequence() []Phase {
+	return []Phase{} // No phases — ask is conversational
 }
 
 // ResearchSequence returns the phases for research sessions.
@@ -38,8 +39,8 @@ func ResearchSequence() []Phase {
 // SequenceFor returns the appropriate phase sequence for a session mode.
 func SequenceFor(mode session.SessionMode) []Phase {
 	switch mode {
-	case session.ModeQuickfix:
-		return QuickfixSequence()
+	case session.ModeAsk:
+		return AskSequence()
 	case session.ModeResearch:
 		return ResearchSequence()
 	default:

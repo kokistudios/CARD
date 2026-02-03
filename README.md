@@ -79,6 +79,8 @@ card ask
 
 No setup, no specifying files upfront. Just start working and Claude pulls relevant context automatically via CARD's MCP server. This is the fastest way to benefit from CARD. Decisions from past sessions inform your current work.
 
+**Recording decisions:** During `card ask`, Claude can record decisions as you discuss them. This creates a lightweight "ask session" automatically — no manual setup needed. If the conversation evolves into work that needs tracked implementation, Claude can promote the ask session to a full session with all decisions preserved.
+
 ### 2. Session Mode — Full Artifact Relay
 
 For structured, multi-phase work, CARD runs a 7-phase pipeline:
@@ -102,7 +104,7 @@ card session start "implement feature X" --repo /path/to/repo
 6. **Simplify** — Refine code for clarity
 7. **Record** — Produce milestone ledger summarizing the work
 
-At each interactive phase, Claude tells you when it's done. Press **Ctrl+C twice** to continue.
+At each interactive phase, Claude signals completion via the `card_phase_complete` MCP tool, and CARD automatically advances to the next phase.
 
 After **Verify**, CARD asks: *Accept / Re-execute / Pause?* If verification found issues, choose re-execute to loop back to the Execute phase with the verification feedback. Execution logs are versioned (v1, v2, ...) so you can see what changed between attempts.
 
@@ -170,12 +172,22 @@ Capsules have three statuses:
 
 When you start working, CARD searches for prior decisions touching the same files and surfaces them automatically. This is the core value: past intent informs future work without re-discovery.
 
-In `card ask` mode, Claude has MCP tools to query CARD's memory:
-- `card_recall` — Search decisions by files, tags, or keywords
-- `card_file_context` — Get all decisions related to specific files
-- `card_preflight` — Pre-flight briefing before implementation
-- `card_hotspots` — Find areas with the most decisions
-- `card_patterns` — Extract implementation patterns from sessions
+In `card ask` mode, Claude has MCP tools to query and update CARD's memory:
+
+**Context tools:**
+- `card_context` — Get unified context before working (modes: starting_task, before_edit, reviewing_pr)
+- `card_query` — Unified search across decisions, sessions, patterns, hotspots, and learnings
+- `card_snapshot` — Query decision state at a point in time (for archaeology queries)
+
+**Recording tools:**
+- `card_record` — Capture a decision immediately (creates ask session automatically)
+- `card_decision` — Record decision with significance tier and optional human confirmation
+- `card_decision_confirm` — Confirm or supersede a proposed architectural decision
+
+**Operations:**
+- `card_session_ops` — Session operations (summary, artifacts, history, review, dedupe)
+- `card_capsule_ops` — Capsule operations (show, chain, invalidate, graph)
+- `card_promote_to_session` — Promote ask conversation to full session for implementation
 
 ## Multi-Repo Sessions
 
