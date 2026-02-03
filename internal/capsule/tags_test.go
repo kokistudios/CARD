@@ -191,3 +191,26 @@ func TestNormalizeTags(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeTag_StripsBackticks(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"`error handling`", "concept:error handling"},
+		{"`migration`", "concept:migration"},
+		{"`src/auth.ts`", "file:src/auth.ts"},
+		{"``double``", "concept:double"},
+		{"no backticks", "concept:no backticks"},
+		{"`file:already-prefixed`", "file:already-prefixed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := NormalizeTag(tt.input)
+			if result != tt.expected {
+				t.Errorf("NormalizeTag(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}

@@ -116,7 +116,11 @@ func InferPrefix(tag string) TagPrefix {
 }
 
 // NormalizeTag applies the inferred prefix to a tag if it doesn't have one.
+// Also strips backticks which may be present from markdown formatting.
 func NormalizeTag(tag string) string {
+	// Strip backticks (from markdown formatting)
+	tag = strings.Trim(tag, "`")
+
 	if HasPrefix(tag) {
 		return tag
 	}

@@ -992,7 +992,6 @@ func capsuleCmd() *cobra.Command {
 	cmd.AddCommand(capsuleListCmd())
 	cmd.AddCommand(capsuleShowCmd())
 	cmd.AddCommand(capsuleInvalidateCmd())
-	cmd.AddCommand(capsuleVerifyCmd())
 	return cmd
 }
 
@@ -1084,17 +1083,8 @@ func capsuleShowCmd() *cobra.Command {
 			ui.KeyValue("Phase:       ", c.Phase)
 			ui.KeyValue("Timestamp:   ", c.Timestamp.Format("2006-01-02 15:04:05"))
 			ui.KeyValue("Source:      ", c.Source)
-			if c.Status != "" {
-				statusStr := string(c.Status)
-				switch c.Status {
-				case capsule.StatusVerified:
-					statusStr = ui.Green(statusStr)
-				case capsule.StatusInvalidated:
-					statusStr = ui.Red(statusStr)
-				case capsule.StatusHypothesis:
-					statusStr = ui.Yellow(statusStr)
-				}
-				ui.KeyValue("Status:      ", statusStr)
+			if c.Status == capsule.StatusInvalidated {
+				ui.KeyValue("Status:      ", ui.Red("invalidated"))
 			}
 			if c.Type != "" {
 				ui.KeyValue("Type:        ", string(c.Type))
@@ -1221,53 +1211,6 @@ to link them together for traceability.`,
 	return cmd
 }
 
-func capsuleVerifyCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "verify <capsule-id>",
-		Short: "Mark a decision capsule as verified",
-		Long: `Mark a decision capsule as verified.
-
-Verification confirms that a decision hypothesis has been proven correct
-through testing, review, or successful implementation. This increases
-confidence in the decision for future recall.`,
-		Example: `  card capsule verify 20260130-auth-abc123`,
-		Args:    cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := loadStore()
-			if err != nil {
-				return err
-			}
-
-			capsuleID := args[0]
-
-			// Get the capsule first
-			c, err := capsule.Get(s, capsuleID)
-			if err != nil {
-				return err
-			}
-
-			// Check if already verified
-			if c.Status == capsule.StatusVerified {
-				ui.Info(fmt.Sprintf("Capsule %s is already verified", capsuleID))
-				return nil
-			}
-
-			// Check if invalidated
-			if c.Status == capsule.StatusInvalidated {
-				ui.Warning(fmt.Sprintf("Capsule %s is invalidated and cannot be verified", capsuleID))
-				return nil
-			}
-
-			// Perform verification
-			if err := capsule.Verify(s, capsuleID); err != nil {
-				return fmt.Errorf("failed to verify: %w", err)
-			}
-
-			ui.Success(fmt.Sprintf("Capsule %s marked as verified", capsuleID))
-			return nil
-		},
-	}
-}
 
 func recallCmd() *cobra.Command {
 	var files []string
@@ -1383,7 +1326,6 @@ Useful with runtime hooks to surface context before file modifications.`,
 
 			for _, file := range files {
 				var matching []capsule.Capsule
-				verified, hypothesis := 0, 0
 
 				for _, c := range allCapsules {
 					if c.Status == capsule.StatusInvalidated {
@@ -1392,21 +1334,10 @@ Useful with runtime hooks to surface context before file modifications.`,
 					if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
 						matching = append(matching, c)
 						matchedCapsules = append(matchedCapsules, c)
-						if c.Status == capsule.StatusVerified {
-							verified++
-						} else {
-							hypothesis++
-						}
 					}
 				}
 
-				statusParts := []string{}
-				if verified > 0 {
-					statusParts = append(statusParts, fmt.Sprintf("%d verified", verified))
-				}
-				if hypothesis > 0 {
-					statusParts = append(statusParts, fmt.Sprintf("%d hypothesis", hypothesis))
-				}
+				statusSummary := fmt.Sprintf("%d active", len(matching))
 
 				var decisions []string
 				for _, c := range matching {
@@ -1416,7 +1347,7 @@ Useful with runtime hooks to surface context before file modifications.`,
 				fi := fileInfo{
 					File:          file,
 					CapsuleCount:  len(matching),
-					StatusSummary: strings.Join(statusParts, ", "),
+					StatusSummary: statusSummary,
 				}
 				if format == "json" {
 					fi.Decisions = decisions
@@ -1747,6 +1678,15 @@ func doctorCmd() *cobra.Command {
 					}
 				}
 
+				// Fix backticks in capsule tags
+				backtickFixed, err := capsule.FixBackticksInTags(s)
+				if err != nil {
+					ui.Warning(fmt.Sprintf("Failed to fix backticks in tags: %v", err))
+				} else if backtickFixed > 0 {
+					ui.Success(fmt.Sprintf("[FIXED] removed backticks from tags in %d capsules", backtickFixed))
+					fixed = append(fixed, fmt.Sprintf("removed backticks from tags in %d capsules", backtickFixed))
+				}
+
 				if len(fixed) == 0 {
 					ui.EmptyState("Nothing to fix.")
 				}
@@ -1784,6 +1724,17 @@ func doctorCmd() *cobra.Command {
 					issues = append(issues, store.Issue{
 						Severity: "warning",
 						Message:  fmt.Sprintf("session %s: stale ephemeral artifact %s (run 'card doctor --fix' to clean)", artifact.SessionID, artifact.Filename),
+					})
+				}
+			}
+
+			// Check for backticks in capsule tags
+			backtickIssues, err := capsule.CheckBackticksInTags(s)
+			if err == nil && len(backtickIssues) > 0 {
+				for _, bi := range backtickIssues {
+					issues = append(issues, store.Issue{
+						Severity: "warning",
+						Message:  fmt.Sprintf("session %s: %d tags contain backticks (run 'card doctor --fix' to clean)", bi.SessionID, bi.Count),
 					})
 				}
 			}

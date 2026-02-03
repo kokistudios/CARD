@@ -521,19 +521,55 @@ func writeSummaryMd(s *store.Store, sess *Session) error {
 		buf.WriteString("\n")
 	}
 
-	// Artifacts (session-level) — only persistent artifacts, not ephemeral ones
-	// Ephemeral artifacts (investigation_summary, implementation_guide, execution_log,
-	// verification_notes) are cleaned up after session completion.
-	artifactFiles := []string{
+	// Artifacts (session-level)
+	// For completed sessions: only persistent artifacts (milestone_ledger, capsules)
+	// For active sessions: include intermediate artifacts for Obsidian navigation
+	sessionDir := s.Path("sessions", sess.ID)
+
+	// Persistent artifacts (always shown if they exist)
+	persistentArtifacts := []string{
 		"milestone_ledger.md",
 	}
+
+	// Intermediate artifacts (only shown for active sessions, cleaned up on completion)
+	intermediateArtifacts := []string{
+		"investigation_summary.md",
+		"implementation_guide.md",
+		"execution_log.md",
+		"verification_notes.md",
+		"research_conclusions.md",
+	}
+
 	var foundArtifacts []string
-	sessionDir := s.Path("sessions", sess.ID)
-	for _, af := range artifactFiles {
+
+	// Add persistent artifacts
+	for _, af := range persistentArtifacts {
 		if _, err := os.Stat(filepath.Join(sessionDir, af)); err == nil {
 			foundArtifacts = append(foundArtifacts, strings.TrimSuffix(af, ".md"))
 		}
 	}
+
+	// Add intermediate artifacts only for non-completed sessions
+	if sess.Status != StatusCompleted && sess.Status != StatusAbandoned {
+		for _, af := range intermediateArtifacts {
+			if _, err := os.Stat(filepath.Join(sessionDir, af)); err == nil {
+				foundArtifacts = append(foundArtifacts, strings.TrimSuffix(af, ".md"))
+			}
+		}
+
+		// Add versioned artifacts (execution_log_v*.md, verification_notes_v*.md)
+		entries, err := os.ReadDir(sessionDir)
+		if err == nil {
+			for _, entry := range entries {
+				name := entry.Name()
+				if (strings.HasPrefix(name, "execution_log_v") || strings.HasPrefix(name, "verification_notes_v")) &&
+					strings.HasSuffix(name, ".md") {
+					foundArtifacts = append(foundArtifacts, strings.TrimSuffix(name, ".md"))
+				}
+			}
+		}
+	}
+
 	if len(foundArtifacts) > 0 {
 		buf.WriteString("## Artifacts\n\n")
 		for _, name := range foundArtifacts {

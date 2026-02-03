@@ -18,7 +18,7 @@ The sole queryable unit of CARD's memory. Each capsule captures:
 - Alternatives (what was considered)
 - Rationale (why this choice)
 - Tags (file paths, concepts, domains)
-- Status (hypothesis → verified → invalidated)
+- Status (active by default; invalidated when superseded or proven wrong)
 
 ### Artifact Relay
 In session mode, each phase runs as a **separate Claude Code invocation** with scoped context. Artifacts produced by one phase are the input to the next. This keeps context bounded and agents fresh.
@@ -110,6 +110,7 @@ Additional states: `paused`, `abandoned`
       <session-id>.md               # Obsidian summary (hub node)
       capsules.md                   # All decisions for this session
       milestone_ledger.md           # File manifest, patterns, iteration summary
+      proposals.json                # Pending decision proposals awaiting confirmation
       # Ephemeral (cleaned up after completion):
       # investigation_summary.md, implementation_guide.md
       # execution_log.md, verification_notes.md
@@ -162,7 +163,7 @@ tags:
   - concept:<name>
   - <domain>
 source: human | agent
-status: hypothesis | verified | invalidated
+status: invalidated            # Only set when invalidated; empty = active
 type: decision | finding
 supersedes: <capsule-id>      # If this replaces an older decision
 superseded_by: <capsule-id>   # If invalidated and replaced
@@ -171,6 +172,28 @@ learned: <insight>            # What was learned from invalidation
 commits:
   - <SHA>
 ```
+
+### Decision Confirmation Flow
+
+For architectural decisions that need human review, CARD uses a two-step confirmation flow:
+
+1. **Propose**: Agent calls `card_decision` with `require_confirmation: true`
+   - Creates a **proposal** stored in `proposals.json` in the session directory
+   - Returns similar/conflicting decisions for the agent to present to the user
+   - Proposal has a 30-minute TTL
+
+2. **Confirm**: Agent presents the decision to the user, then calls `card_decision_confirm`
+   - Actions: `create` (store as new), `supersede` (replace old decisions), `skip` (discard), or `merge_into:<id>` (update existing)
+   - On confirmation, the capsule is stored in `capsules.md`
+   - The proposal is deleted from `proposals.json`
+
+**Why proposals persist to disk:**
+- Each phase runs as a separate Claude Code invocation
+- In-memory state is lost when MCP server restarts between phases
+- Disk persistence allows proposals from one phase to be confirmed in the next
+- `card_context` surfaces pending proposals so agents see unconfirmed decisions
+
+**For implementation decisions** (obvious choices, pattern-following), use `require_confirmation: false` to store immediately without the two-step flow.
 
 ## Technology
 

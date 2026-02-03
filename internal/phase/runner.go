@@ -66,22 +66,26 @@ func findArtifactInDirWithPath(dir string) (*artifact.Artifact, string, error) {
 }
 
 // phaseTools returns the allowed Claude Code tools for a phase.
+// MCP tools (mcp__card__* and mcp__card-dev__*) are included for phases that need them.
 func phaseTools(p Phase) []string {
+	// CARD MCP tools - include both server names for compatibility
+	mcpTools := []string{"mcp__card__*", "mcp__card-dev__*"}
+
 	switch p {
 	case PhaseInvestigate:
-		return []string{"Read", "Glob", "Grep", "Bash(git log:git diff:git show:ls)", "Write"}
+		return append([]string{"Read", "Glob", "Grep", "Bash(git log:git diff:git show:ls)", "Write"}, mcpTools...)
 	case PhasePlan:
-		return []string{"Read", "Glob", "Grep", "Write"}
+		return append([]string{"Read", "Glob", "Grep", "Write"}, mcpTools...)
 	case PhaseReview:
-		return []string{"Read", "Glob", "Grep", "Write"}
+		return append([]string{"Read", "Glob", "Grep", "Write"}, mcpTools...)
 	case PhaseExecute:
-		return nil
+		return nil // All tools allowed
 	case PhaseVerify:
-		return []string{"Read", "Glob", "Grep", "Bash(git log:git diff:git show:go test:go build:npm test:make)", "Write"}
+		return append([]string{"Read", "Glob", "Grep", "Bash(git log:git diff:git show:go test:go build:npm test:make)", "Write"}, mcpTools...)
 	case PhaseSimplify:
-		return nil
+		return nil // All tools allowed
 	case PhaseRecord:
-		return []string{"Read", "Glob", "Grep", "Bash(git log:git diff:git show)", "Write"}
+		return append([]string{"Read", "Glob", "Grep", "Bash(git log:git diff:git show)", "Write"}, mcpTools...)
 	default:
 		return nil
 	}

@@ -40,7 +40,6 @@ type templateData struct {
 	Description          string
 	OutputDir            string
 	ArtifactFilename     string
-	RecalledContext      string
 	OperatorContext      string
 	PriorArtifactContent string
 	Repos                []repoInfo
@@ -52,7 +51,7 @@ type templateData struct {
 }
 
 // RenderSessionWidePrompt renders a phase template with all session repos.
-func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, workDir string, recalledContext string, priorArtifacts []*artifact.Artifact) (string, error) {
+func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, workDir string, priorArtifacts []*artifact.Artifact) (string, error) {
 	filename := fmt.Sprintf("templates/%s.md", string(p))
 	raw, err := templateFS.ReadFile(filename)
 	if err != nil {
@@ -77,7 +76,6 @@ func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, wor
 		Description:       sess.Description,
 		OutputDir:         workDir,
 		ArtifactFilename:  artifact.PhaseFilename(string(p)),
-		RecalledContext:   recalledContext,
 		OperatorContext:   sess.Context,
 		Repos:             repos,
 		ExecutionAttempts: len(sess.ExecutionHistory),
@@ -136,6 +134,12 @@ func RenderSessionWideInitialMessage(s *store.Store, sess *session.Session, p Ph
 		}
 		msg += fmt.Sprintf("\n### %s (%s)\n- Path: %s\n- Remote: %s\n- Recent git log:\n%s\n",
 			r.Name, r.ID, r.LocalPath, r.RemoteURL, getGitLog(r.LocalPath))
+	}
+
+	// For non-interactive phases, add "Go" to trigger the agent to start
+	// (templates instruct agents to wait for "Go" before beginning work)
+	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord {
+		msg += "\n\nGo"
 	}
 
 	return msg

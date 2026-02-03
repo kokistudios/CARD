@@ -14,7 +14,6 @@ import (
 	"github.com/kokistudios/card/internal/artifact"
 	"github.com/kokistudios/card/internal/capsule"
 	"github.com/kokistudios/card/internal/change"
-	"github.com/kokistudios/card/internal/recall"
 	"github.com/kokistudios/card/internal/repo"
 	"github.com/kokistudios/card/internal/runtime"
 	"github.com/kokistudios/card/internal/session"
@@ -142,8 +141,13 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 		ui.Notify("CARD", fmt.Sprintf("%s phase complete", p))
 	}
 
-	// Clean up intermediate artifacts — only execution log and milestone ledger persist
+	// Clean up intermediate artifacts — only milestone ledger and capsules persist
 	cleanupIntermediateArtifacts(s, sess)
+
+	// Regenerate session summary to remove stale links to cleaned-up artifacts
+	if err := session.RegenerateSummary(s, sess.ID); err != nil {
+		ui.Warning(fmt.Sprintf("Failed to regenerate session summary: %v", err))
+	}
 
 	// Final transition to completed
 	if err := session.Transition(s, sess.ID, session.StatusCompleted); err != nil {
@@ -181,35 +185,6 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 
 	ui.PhaseHeader(phaseName, idx, totalPhases, fmt.Sprintf("all repos (%d)", len(sess.Repos)), sess.ID)
 
-	// Assemble recall context across ALL repos (only for investigate)
-	recalledContext := ""
-	if p == PhaseInvestigate {
-		ui.Status("Assembling recall context across all repos...")
-		var allRecallParts []string
-		for _, repoID := range sess.Repos {
-			r, err := repo.Get(s, repoID)
-			if err != nil {
-				continue
-			}
-			recallResult, recallErr := recall.Query(s, recall.RecallQuery{
-				RepoID:      repoID,
-				RepoPath:    r.LocalPath,
-				MaxCapsules: s.Config.Recall.MaxContextBlocks,
-			})
-			if recallErr == nil && len(recallResult.Capsules) > 0 {
-				formatted := recall.FormatContext(recallResult, s.Config.Recall.MaxContextTokens)
-				allRecallParts = append(allRecallParts, fmt.Sprintf("### %s (%s)\n%s", r.Name, r.ID, formatted))
-				ui.Logger.Info("Recall context assembled",
-					"repo", r.Name,
-					"decisions", len(recallResult.Capsules),
-					"sessions", len(recallResult.Sessions))
-			}
-		}
-		if len(allRecallParts) > 0 {
-			recalledContext = strings.Join(allRecallParts, "\n\n---\n\n")
-		}
-	}
-
 	workDir := filepath.Join(os.TempDir(), "card", sess.ID, phaseName)
 
 	// Load prior artifacts for context
@@ -227,7 +202,7 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	}
 
 	// Render session-wide prompt
-	systemPrompt, err := RenderSessionWidePrompt(s, sess, templatePhase, workDir, recalledContext, priorArtifacts)
+	systemPrompt, err := RenderSessionWidePrompt(s, sess, templatePhase, workDir, priorArtifacts)
 	if err != nil {
 		return fmt.Errorf("failed to render session-wide prompt: %w", err)
 	}
@@ -365,12 +340,13 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 		return fmt.Errorf("failed to store artifact: %w", err)
 	}
 
-	// Version execution logs and verification notes
-	if p == PhaseExecute || p == PhaseVerify {
-		if err := versionArtifact(s, sess, storedPath, p); err != nil {
-			ui.Warning(fmt.Sprintf("Failed to version artifact: %v", err))
-		}
+	// Regenerate session summary to update Obsidian links with new artifact
+	if err := session.RegenerateSummary(s, sess.ID); err != nil {
+		ui.Warning(fmt.Sprintf("Failed to update session summary: %v", err))
 	}
+
+	// Note: Versioning of execution_log and verification_notes now happens BEFORE re-execute
+	// (in runExecuteVerifyLoop) to avoid duplication between v1 and the unversioned file.
 
 	// Extract capsules
 	capsules, err := capsule.ExtractFromArtifact(a)
@@ -475,6 +451,9 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 			}
 			firstIteration = false
 		} else {
+			// Re-execute: version previous iteration's artifacts before overwriting
+			versionPreviousIteration(s, sess)
+
 			if err := session.Transition(s, sess.ID, session.StatusExecuting); err != nil {
 				return fmt.Errorf("failed to transition to executing: %w", err)
 			}
@@ -531,13 +510,6 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 
 		switch decision {
 		case "accept":
-			// Mark execution-phase capsules as verified
-			count, err := capsule.VerifySessionCapsules(s, sess.ID, "execute")
-			if err != nil {
-				ui.Warning(fmt.Sprintf("Failed to verify capsules: %v", err))
-			} else if count > 0 {
-				ui.Logger.Info("Capsules verified", "count", count)
-			}
 			// Update execution outcome
 			sess.UpdateLastExecutionOutcome("completed", "")
 			_ = session.Update(s, sess)
@@ -622,32 +594,32 @@ func loadVersionedExecutionHistory(s *store.Store, sessionID string, currentAtte
 	return history
 }
 
-// versionArtifact creates a versioned copy of an execution log or verification notes artifact.
-func versionArtifact(s *store.Store, sess *session.Session, artifactPath string, p Phase) error {
+// versionPreviousIteration versions the current execution_log.md and verification_notes.md
+// before a re-execute overwrites them. Called at the START of re-execution, not after each phase.
+// This prevents duplication where v1 would otherwise match the unversioned file.
+func versionPreviousIteration(s *store.Store, sess *session.Session) {
 	sessionDir := s.Path("sessions", sess.ID)
+	// Version number is the previous iteration (current ExecutionHistory length - 1)
+	// because we're versioning BEFORE adding the new attempt
+	versionNum := len(sess.ExecutionHistory)
 
-	var versionedFilename string
-	if p == PhaseExecute {
-		versionedFilename = fmt.Sprintf("execution_log_v%d.md", len(sess.ExecutionHistory))
-	} else if p == PhaseVerify {
-		versionedFilename = fmt.Sprintf("verification_notes_v%d.md", len(sess.ExecutionHistory))
-	} else {
-		return nil // No versioning for other phases
+	// Version execution_log.md → execution_log_v{N}.md
+	execPath := filepath.Join(sessionDir, "execution_log.md")
+	if data, err := os.ReadFile(execPath); err == nil {
+		versionedPath := filepath.Join(sessionDir, fmt.Sprintf("execution_log_v%d.md", versionNum))
+		if err := os.WriteFile(versionedPath, data, 0644); err != nil {
+			ui.Warning(fmt.Sprintf("Failed to version execution_log: %v", err))
+		}
 	}
 
-	versionedPath := filepath.Join(sessionDir, versionedFilename)
-
-	// Copy the artifact to the versioned filename
-	data, err := os.ReadFile(artifactPath)
-	if err != nil {
-		return fmt.Errorf("failed to read artifact for versioning: %w", err)
+	// Version verification_notes.md → verification_notes_v{N}.md
+	verifyPath := filepath.Join(sessionDir, "verification_notes.md")
+	if data, err := os.ReadFile(verifyPath); err == nil {
+		versionedPath := filepath.Join(sessionDir, fmt.Sprintf("verification_notes_v%d.md", versionNum))
+		if err := os.WriteFile(versionedPath, data, 0644); err != nil {
+			ui.Warning(fmt.Sprintf("Failed to version verification_notes: %v", err))
+		}
 	}
-
-	if err := os.WriteFile(versionedPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write versioned artifact: %w", err)
-	}
-
-	return nil
 }
 
 // CurrentPhase determines the current phase from a session's status.

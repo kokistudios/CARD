@@ -134,6 +134,11 @@ var (
 func Init(noColorFlag bool) {
 	noColor := noColorFlag || os.Getenv("NO_COLOR") != ""
 
+	// Reset terminal to sane state. Some runtimes (like Codex) can leave the terminal
+	// in raw mode where \n doesn't include carriage return, causing display corruption.
+	// This ensures CARD starts with a clean terminal regardless of previous state.
+	SanitizeTerminal()
+
 	// Pre-set dark background to prevent termenv OSC query that leaks ^[[I focus events
 	lipgloss.SetHasDarkBackground(true)
 
@@ -162,6 +167,19 @@ func Init(noColorFlag bool) {
 	if noColor {
 		Logger.SetStyles(log.DefaultStyles())
 	}
+}
+
+// SanitizeTerminal resets the terminal to a sane state.
+// This fixes display corruption when the terminal was left in raw mode
+// (where \n doesn't reset cursor to column 0) by a previous process.
+func SanitizeTerminal() {
+	// Use stty sane to reset terminal to normal cooked mode
+	cmd := exec.Command("stty", "sane")
+	cmd.Stdin = os.Stdin
+	_ = cmd.Run()
+
+	// Also print reset escape sequence and carriage return to be safe
+	fmt.Fprint(os.Stderr, "\033[0m\r")
 }
 
 func Bold(s string) string   { return boldStyle.Render(s) }
@@ -209,6 +227,11 @@ func Status(msg string) {
 
 // PhaseHeader renders a prominent CARD-branded phase banner with progress indicator.
 func PhaseHeader(phase string, index, total int, repoName, repoID string) {
+	// Reset cursor to column 0 before rendering the banner.
+	// This prevents display issues when terminal was left in raw mode
+	// (e.g., after bubbletea prompts) where \n doesn't implicitly include \r.
+	fmt.Fprint(os.Stderr, "\r")
+
 	cardBrand := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("12")).
@@ -261,6 +284,9 @@ func PhaseComplete(phase string) {
 
 // SessionHeader prints a styled session start banner.
 func SessionHeader(id, description string) {
+	// Reset cursor to column 0 (see PhaseHeader comment)
+	fmt.Fprint(os.Stderr, "\r")
+
 	box := lipgloss.NewStyle().
 		Bold(true).
 		BorderStyle(lipgloss.DoubleBorder()).
@@ -333,6 +359,9 @@ func EmptyState(msg string) {
 
 // CommandBanner renders a small CARD-branded banner for a command.
 func CommandBanner(command string, subtitle string) {
+	// Reset cursor to column 0 (see PhaseHeader comment)
+	fmt.Fprint(os.Stderr, "\r")
+
 	brand := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("12")).

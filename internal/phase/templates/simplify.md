@@ -48,6 +48,7 @@ These common "simplifications" actually reduce clarity:
 - **Premature abstraction removal** — Keep abstractions that aid understanding. Not all duplication needs eliminating.
 - **Combining too many concerns** — Functions should do one thing well. Don't merge unrelated logic just to reduce file count.
 - **Chained method calls without breaks** — Long chains should have line breaks for readability.
+- **Unnecessary comments** — Remove comments that don't explain complex logic. Comments like "// get the user" above `getUser()` add noise, not clarity. Code should be self-documenting; reserve comments for genuinely complex algorithms, non-obvious business rules, or important "why" explanations.
 
 ## Process
 

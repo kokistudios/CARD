@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,7 +208,7 @@ func (c *ClaudeRuntime) invokeInteractive(claudePath string, env []string, opts 
 }
 
 func (c *ClaudeRuntime) invokeNonInteractive(claudePath string, env []string, opts InvokeOptions) error {
-	args := []string{"-p", opts.InitialMessage}
+	args := []string{"-p"}
 
 	if opts.SystemPrompt != "" {
 		args = append(args, "--system-prompt", opts.SystemPrompt)
@@ -221,28 +220,62 @@ func (c *ClaudeRuntime) invokeNonInteractive(claudePath string, env []string, op
 		}
 	}
 
+	// MCP servers are loaded from user config (~/.claude.json) automatically
+	// No need for --mcp-config flag
+
+	// Prompt is positional argument after all options
+	args = append(args, "--", opts.InitialMessage)
+
 	cmd := exec.Command(claudePath, args...)
 	if opts.WorkingDir != "" {
 		cmd.Dir = opts.WorkingDir
 	}
 	cmd.Env = env
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start claude: %w", err)
 	}
-	if err := cmd.Wait(); err != nil {
-		if claudeIsInterrupt(err) {
-			return ErrInterrupted
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- cmd.Wait()
+	}()
+
+	// Poll for phase complete signal, same as interactive mode
+	if opts.OutputDir != "" {
+		ticker := time.NewTicker(claudeSignalPollInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case err := <-doneCh:
+				return claudeHandleProcessExit(err)
+
+			case <-ticker.C:
+				sig, sigErr := signal.CheckPhaseComplete(opts.OutputDir)
+				if sigErr != nil {
+					continue
+				}
+				if sig != nil && sig.Status == "complete" {
+					_ = cmd.Process.Signal(syscall.SIGTERM)
+
+					select {
+					case <-doneCh:
+					case <-time.After(claudeSignalGracePeriod):
+						_ = cmd.Process.Kill()
+						<-doneCh
+					}
+
+					return ErrPhaseComplete
+				}
+			}
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("claude exited with code %d", exitErr.ExitCode())
-		}
-		return fmt.Errorf("failed to run claude: %w", err)
 	}
 
-	return nil
+	execErr := <-doneCh
+	return claudeHandleProcessExit(execErr)
 }
 
 func claudeHandleProcessExit(err error) error {

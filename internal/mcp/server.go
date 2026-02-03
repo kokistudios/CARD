@@ -32,7 +32,7 @@ type Server struct {
 func NewServer(st *store.Store, version string) *Server {
 	s := &Server{
 		store:     st,
-		proposals: NewProposalStore(),
+		proposals: NewProposalStore(st),
 	}
 
 	impl := &mcp.Implementation{
@@ -96,7 +96,7 @@ func (s *Server) registerTools() {
 		Name: "card_record",
 		Description: "Record a decision or finding immediately without waiting for artifact extraction. " +
 			"USE THIS when you make a significant decision during any phase - the decision survives even if " +
-			"the session crashes or re-executes. Recorded capsules start as 'hypothesis' status until verified. " +
+			"the session crashes or re-executes. " +
 			"If no session_id provided, finds the most recent active session or creates an ask session automatically.",
 	}, s.handleRecord)
 
@@ -232,7 +232,7 @@ type RecallArgs struct {
 	Query              string   `json:"query,omitempty" jsonschema:"Search capsule content: the question asked, choice made, and rationale given. Example: 'TypeORM' finds 'Why TypeORM over raw SQL?' Use tags param for concept search like 'authentication'."`
 	Repo               string   `json:"repo,omitempty" jsonschema:"Repository ID to scope the search (optional - searches all repos if not specified)"`
 	IncludeEvolution   bool     `json:"include_evolution,omitempty" jsonschema:"If true, show all phases of each decision instead of just the latest (default: false)"`
-	Status             string   `json:"status,omitempty" jsonschema:"Filter by capsule status: 'verified', 'hypothesis', or 'invalidated' (optional - returns all if not specified)"`
+	Status             string   `json:"status,omitempty" jsonschema:"Filter by capsule status: 'invalidated' to see only invalidated decisions (optional - returns active decisions if not specified)"`
 	Format             string   `json:"format,omitempty" jsonschema:"Output format: 'full' (default) or 'compact' (IDs and choices only)"`
 	Significance       string   `json:"significance,omitempty" jsonschema:"Filter by significance tier: 'architectural', 'implementation', 'context', or 'all' (default: 'all')"`
 	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"If true, include invalidated decisions (default: false - excludes invalidated)"`
@@ -255,12 +255,12 @@ type CapsuleSummary struct {
 	Rationale    string   `json:"rationale,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	MatchTier    string   `json:"match_tier,omitempty"`
-	Status       string   `json:"status"`                      // verified, hypothesis, invalidated
-	Type         string   `json:"type,omitempty"`              // decision or finding
-	Significance string   `json:"significance,omitempty"`      // architectural, implementation, context
-	SupersededBy string   `json:"superseded_by,omitempty"`     // If invalidated, what replaced it
-	Recency      string   `json:"recency,omitempty"`           // Human-readable time (e.g., "2 days ago")
-	PensieveLink string   `json:"pensieve_link,omitempty"`     // Path to milestone_ledger
+	Status       string   `json:"status"`                  // empty (active) or invalidated
+	Type         string   `json:"type,omitempty"`          // decision or finding
+	Significance string   `json:"significance,omitempty"`  // architectural, implementation, context
+	SupersededBy string   `json:"superseded_by,omitempty"` // If invalidated, what replaced it
+	Recency      string   `json:"recency,omitempty"`       // Human-readable time (e.g., "2 days ago")
+	PensieveLink string   `json:"pensieve_link,omitempty"` // Path to milestone_ledger
 }
 
 // SessionSummary is a lightweight view of a session.
@@ -594,10 +594,10 @@ type ExecutionAttempt struct {
 
 // SessionExecutionHistoryResult contains all versioned execution artifacts.
 type SessionExecutionHistoryResult struct {
-	SessionID    string             `json:"session_id"`
-	TotalAttempts int               `json:"total_attempts"`
-	Attempts     []ExecutionAttempt `json:"attempts"`
-	Message      string             `json:"message,omitempty"`
+	SessionID     string             `json:"session_id"`
+	TotalAttempts int                `json:"total_attempts"`
+	Attempts      []ExecutionAttempt `json:"attempts"`
+	Message       string             `json:"message,omitempty"`
 }
 
 func (s *Server) handleSessionExecutionHistory(ctx context.Context, req *mcp.CallToolRequest, args SessionExecutionHistoryArgs) (*mcp.CallToolResult, any, error) {
@@ -881,7 +881,7 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 	c := capsule.Capsule{
 		SessionID:    sess.ID,
 		RepoIDs:      sess.Repos,
-		Phase:        string(sess.Status), // Use current status as phase
+		Phase:        normalizeStatusToPhase(string(sess.Status)),
 		Timestamp:    time.Now().UTC(),
 		Question:     args.Question,
 		Choice:       args.Choice,
@@ -889,7 +889,6 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 		Rationale:    args.Rationale,
 		Source:       source,
 		Tags:         tags,
-		Status:       capsule.StatusHypothesis,
 		Type:         capsuleType,
 	}
 	c.ID = capsule.GenerateID(sess.ID, c.Phase, c.Question)
@@ -898,11 +897,9 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 		return nil, nil, fmt.Errorf("failed to store capsule: %w", err)
 	}
 
-	message := fmt.Sprintf("Decision recorded as %s (status: %s).", c.ID, c.Status)
+	message := fmt.Sprintf("Decision recorded as %s.", c.ID)
 	if createdAskSession {
 		message += " Ask session created. Use card_promote_to_session when ready for implementation."
-	} else {
-		message += " Will be verified when session completes."
 	}
 
 	out := RecordResult{
@@ -997,16 +994,13 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		}
 
 		// Build status summary
-		verified, hypothesis, invalidated := 0, 0, 0
+		active, invalidated := 0, 0
 		var mostRecent time.Time
 		for _, c := range matchingCapsules {
-			switch c.Status {
-			case capsule.StatusVerified:
-				verified++
-			case capsule.StatusHypothesis:
-				hypothesis++
-			case capsule.StatusInvalidated:
+			if c.Status == capsule.StatusInvalidated {
 				invalidated++
+			} else {
+				active++
 			}
 			if c.Timestamp.After(mostRecent) {
 				mostRecent = c.Timestamp
@@ -1014,11 +1008,8 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		}
 
 		statusParts := []string{}
-		if verified > 0 {
-			statusParts = append(statusParts, fmt.Sprintf("%d verified", verified))
-		}
-		if hypothesis > 0 {
-			statusParts = append(statusParts, fmt.Sprintf("%d hypothesis", hypothesis))
+		if active > 0 {
+			statusParts = append(statusParts, fmt.Sprintf("%d active", active))
 		}
 		if invalidated > 0 {
 			statusParts = append(statusParts, fmt.Sprintf("%d invalidated", invalidated))
@@ -1680,16 +1671,13 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		}
 
 		// Build status summary
-		verified, hypothesis, invalidated := 0, 0, 0
+		active, invalidated := 0, 0
 		var mostRecent time.Time
 		for _, c := range matchingCapsules {
-			switch c.Status {
-			case capsule.StatusVerified:
-				verified++
-			case capsule.StatusHypothesis:
-				hypothesis++
-			case capsule.StatusInvalidated:
+			if c.Status == capsule.StatusInvalidated {
 				invalidated++
+			} else {
+				active++
 			}
 			if c.Timestamp.After(mostRecent) {
 				mostRecent = c.Timestamp
@@ -1697,11 +1685,8 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		}
 
 		statusParts := []string{}
-		if verified > 0 {
-			statusParts = append(statusParts, fmt.Sprintf("%d verified", verified))
-		}
-		if hypothesis > 0 {
-			statusParts = append(statusParts, fmt.Sprintf("%d hypothesis", hypothesis))
+		if active > 0 {
+			statusParts = append(statusParts, fmt.Sprintf("%d active", active))
 		}
 		if invalidated > 0 {
 			statusParts = append(statusParts, fmt.Sprintf("%d invalidated", invalidated))
@@ -1932,6 +1917,34 @@ I'll follow these patterns in my implementation."
 - Use card_record() to capture significant decisions mid-task
 - Use card_promote_to_session() when the conversation needs tracked implementation work
 
+## Communicating Decisions (Critical for Readability)
+
+MCP tool calls display verbosely in the terminal — full parameter dumps and JSON responses. Users can't easily read them. Your job is to make decisions readable BEFORE the MCP call.
+
+### Pattern: Summarize, Then Record
+
+**Bad:** [MCP call with wall of parameters that user must parse]
+
+**Good:**
+1. Output a readable summary in your response text
+2. Then make the MCP call (which can be noisy — user already read the summary)
+
+### Example
+
+Instead of just calling card_decision, first write:
+
+"Decided on two-layer architecture: Layer 1 orchestrates tools, Layer 2 synthesizes natural responses. This separates data gathering from presentation, letting us tune each independently."
+
+Then call card_decision() with the structured data.
+
+### Guidelines
+- Summarize — scannable, not exhaustive
+- Include: what was decided, why, key tradeoff if any
+- Don't repeat the full alternatives list — that's what the structured record is for
+- The MCP call becomes the "save to database" operation, not the communication
+
+This ensures users can follow decisions in real-time without parsing tool call syntax.
+
 ## Summary
 1. Check context BEFORE touching files
 2. Surface relevant decisions PROACTIVELY
@@ -1985,7 +1998,7 @@ func generateRecommendations(files map[string]FileDecisions, relevant []CapsuleS
 // WriteArtifactArgs defines input for card_write_artifact.
 type WriteArtifactArgs struct {
 	SessionID string `json:"session_id" jsonschema:"The session ID this artifact belongs to"`
-	Phase     string `json:"phase" jsonschema:"The phase producing this artifact: investigate, plan, execute, or record"`
+	Phase     string `json:"phase" jsonschema:"The phase producing this artifact: investigate, plan, review, execute, verify, or record"`
 	Content   string `json:"content" jsonschema:"The full artifact content including YAML frontmatter (---\\nsession: ...\\n---)"`
 }
 
@@ -2039,11 +2052,13 @@ func (s *Server) handleWriteArtifact(ctx context.Context, req *mcp.CallToolReque
 	validPhases := map[string]bool{
 		"investigate": true,
 		"plan":        true,
+		"review":      true,
 		"execute":     true,
+		"verify":      true,
 		"record":      true,
 	}
 	if !validPhases[args.Phase] {
-		return nil, nil, fmt.Errorf("invalid phase: %s (must be investigate, plan, execute, or record)", args.Phase)
+		return nil, nil, fmt.Errorf("invalid phase: %s", args.Phase)
 	}
 
 	// Store at session level (canonical location)
@@ -2052,10 +2067,15 @@ func (s *Server) handleWriteArtifact(ctx context.Context, req *mcp.CallToolReque
 		return nil, nil, fmt.Errorf("failed to store artifact: %w", err)
 	}
 
-	// If running inside a phase runtime, also mirror to the work directory
-	if outputDir := os.Getenv("CARD_OUTPUT_DIR"); outputDir != "" {
-		workPath := filepath.Join(outputDir, artifact.PhaseFilename(args.Phase))
-		// Best-effort mirror; do not fail if this write fails
+	// Mirror to work directory for orchestrator to pick up
+	// Use CARD_OUTPUT_DIR if set (Claude), otherwise compute it (Codex)
+	outputDir := os.Getenv("CARD_OUTPUT_DIR")
+	if outputDir == "" {
+		outputDir = filepath.Join(os.TempDir(), "card", args.SessionID, args.Phase)
+	}
+	workPath := filepath.Join(outputDir, artifact.PhaseFilename(args.Phase))
+	// Best-effort mirror; do not fail if this write fails
+	if err := os.MkdirAll(outputDir, 0755); err == nil {
 		if err := os.WriteFile(workPath, []byte(a.RawContent), 0644); err == nil {
 			destPath = workPath
 		}
@@ -2100,6 +2120,7 @@ func (s *Server) handlePhaseComplete(ctx context.Context, req *mcp.CallToolReque
 	// Validate phase
 	validPhases := map[string]bool{
 		"investigate": true,
+		"plan":        true,
 		"review":      true,
 		"execute":     true,
 		"verify":      true,
@@ -2118,9 +2139,11 @@ func (s *Server) handlePhaseComplete(ctx context.Context, req *mcp.CallToolReque
 	}
 
 	// Get output dir from environment (set by orchestrator when invoking Claude)
+	// or compute it from session/phase (needed for Codex which doesn't pass env to MCP servers)
 	outputDir := os.Getenv("CARD_OUTPUT_DIR")
 	if outputDir == "" {
-		return nil, nil, fmt.Errorf("CARD_OUTPUT_DIR not set - this tool can only be called during a CARD session phase")
+		// Compute output dir using same formula as orchestrator
+		outputDir = filepath.Join(os.TempDir(), "card", args.SessionID, args.Phase)
 	}
 
 	// Import the signal package and write signal file
@@ -2176,6 +2199,24 @@ func writePhaseCompleteSignal(workDir string, sig *phaseCompleteSignal) error {
 	return nil
 }
 
+// normalizeStatusToPhase converts a session status (e.g., "investigating") to its phase name (e.g., "investigate").
+func normalizeStatusToPhase(status string) string {
+	statusToPhase := map[string]string{
+		"investigating": "investigate",
+		"planning":      "plan",
+		"reviewing":     "review",
+		"approved":      "execute",
+		"executing":     "execute",
+		"verifying":     "verify",
+		"simplifying":   "simplify",
+		"recording":     "record",
+	}
+	if phase, ok := statusToPhase[status]; ok {
+		return phase
+	}
+	return status // Return as-is for "ask", "started", etc.
+}
+
 // DecisionArgs defines input for card_decision.
 type DecisionArgs struct {
 	Question            string   `json:"question" jsonschema:"What is being decided"`
@@ -2194,15 +2235,15 @@ type DecisionArgs struct {
 // DecisionResult is the output of card_decision.
 type DecisionResult struct {
 	// For immediate storage (require_confirmation=false)
-	CapsuleID     string `json:"capsule_id,omitempty"`
+	CapsuleID      string `json:"capsule_id,omitempty"`
 	SimilarWarning string `json:"similar_warning,omitempty"`
 
 	// For proposal flow (require_confirmation=true)
-	ProposalID          string              `json:"proposal_id,omitempty"`
-	SimilarExisting     []SimilarDecision   `json:"similar_existing,omitempty"`
-	Contradicts         []ConflictingDecision `json:"contradicts,omitempty"`
-	SuggestedAction     string              `json:"suggested_action,omitempty"`
-	AwaitingConfirmation bool               `json:"awaiting_confirmation,omitempty"`
+	ProposalID           string                `json:"proposal_id,omitempty"`
+	SimilarExisting      []SimilarDecision     `json:"similar_existing,omitempty"`
+	Contradicts          []ConflictingDecision `json:"contradicts,omitempty"`
+	SuggestedAction      string                `json:"suggested_action,omitempty"`
+	AwaitingConfirmation bool                  `json:"awaiting_confirmation,omitempty"`
 
 	Message string `json:"message"`
 }
@@ -2280,10 +2321,11 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 
 	// Build the capsule
 	now := time.Now().UTC()
+	phase := normalizeStatusToPhase(string(sess.Status))
 	c := capsule.Capsule{
 		SessionID:    sessionID,
 		RepoIDs:      sess.Repos,
-		Phase:        string(sess.Status), // Use current session status as phase
+		Phase:        phase,
 		Timestamp:    now,
 		CreatedAt:    now,
 		Question:     args.Question,
@@ -2293,7 +2335,6 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 		Origin:       origin,
 		Source:       origin, // Keep Source for backwards compatibility
 		Tags:         normalizedTags,
-		Status:       capsule.StatusHypothesis,
 		Type:         capsuleType,
 		Significance: sig,
 		EnabledBy:    args.EnabledBy,
@@ -2527,12 +2568,24 @@ type ContextArgs struct {
 	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum results to return (default 15)"`
 }
 
+// PendingProposalSummary is a lightweight view of a pending proposal.
+type PendingProposalSummary struct {
+	ID              string    `json:"id"`
+	SessionID       string    `json:"session_id"`
+	Question        string    `json:"question"`
+	Choice          string    `json:"choice"`
+	SuggestedAction string    `json:"suggested_action"`
+	CreatedAt       time.Time `json:"created_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+}
+
 // ContextResult is the output of card_context.
 type ContextResult struct {
 	Mode              string                   `json:"mode"`
 	Files             map[string]FileDecisions `json:"files,omitempty"`
 	RecentDecisions   []CapsuleSummary         `json:"recent_decisions,omitempty"`
 	RelevantDecisions []CapsuleSummary         `json:"relevant_decisions,omitempty"`
+	PendingProposals  []PendingProposalSummary `json:"pending_proposals,omitempty"`
 	Patterns          []Pattern                `json:"patterns,omitempty"`
 	Hotspots          []FileHotspot            `json:"hotspots,omitempty"`
 	Recommendations   string                   `json:"recommendations,omitempty"`
@@ -2670,6 +2723,35 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 		return nil, nil, fmt.Errorf("invalid mode: %s (must be starting_task, before_edit, or reviewing_pr)", args.Mode)
 	}
 
+	// Check for pending proposals across all sessions
+	pendingCount := s.proposals.Count()
+	if pendingCount > 0 {
+		sessionsDir := s.store.Path("sessions")
+		entries, _ := os.ReadDir(sessionsDir)
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			proposals := s.proposals.ListBySession(e.Name())
+			for _, p := range proposals {
+				out.PendingProposals = append(out.PendingProposals, PendingProposalSummary{
+					ID:              p.ID,
+					SessionID:       p.SessionID,
+					Question:        p.Capsule.Question,
+					Choice:          p.Capsule.Choice,
+					SuggestedAction: p.SuggestedAction,
+					CreatedAt:       p.CreatedAt,
+					ExpiresAt:       p.ExpiresAt,
+				})
+			}
+		}
+
+		if len(out.PendingProposals) > 0 {
+			warning := fmt.Sprintf("\n⚠️ %d PENDING PROPOSALS require confirmation. Use card_decision_confirm to confirm or skip them.", len(out.PendingProposals))
+			out.Recommendations = out.Recommendations + warning
+		}
+	}
+
 	return nil, out, nil
 }
 
@@ -2681,7 +2763,7 @@ type QueryArgs struct {
 	Files              []string `json:"files,omitempty" jsonschema:"File paths to filter by"`
 	Repo               string   `json:"repo,omitempty" jsonschema:"Repository ID to scope the search"`
 	Significance       string   `json:"significance,omitempty" jsonschema:"'architectural', 'implementation', 'context', or 'all'"`
-	Status             string   `json:"status,omitempty" jsonschema:"Filter by status: 'verified', 'hypothesis', 'invalidated'"`
+	Status             string   `json:"status,omitempty" jsonschema:"Filter by status: 'invalidated' to see only invalidated (default: active only)"`
 	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"Include invalidated decisions (default: false)"`
 	IncludeEvolution   bool     `json:"include_evolution,omitempty" jsonschema:"Show all phases of each decision"`
 	Limit              int      `json:"limit,omitempty" jsonschema:"Maximum results to return"`
@@ -3053,11 +3135,11 @@ type CapsuleOpsResult struct {
 
 // DependencyGraph represents the decision dependency graph.
 type DependencyGraph struct {
-	Root     CapsuleSummary   `json:"root"`
-	Enables  []CapsuleSummary `json:"enables,omitempty"`
-	EnabledBy []CapsuleSummary `json:"enabled_by,omitempty"`
+	Root       CapsuleSummary   `json:"root"`
+	Enables    []CapsuleSummary `json:"enables,omitempty"`
+	EnabledBy  []CapsuleSummary `json:"enabled_by,omitempty"`
 	Constrains []CapsuleSummary `json:"constrains,omitempty"`
-	ASCII    string           `json:"ascii,omitempty"`
+	ASCII      string           `json:"ascii,omitempty"`
 }
 
 func (s *Server) handleCapsuleOps(ctx context.Context, req *mcp.CallToolRequest, args CapsuleOpsArgs) (*mcp.CallToolResult, any, error) {
@@ -3202,9 +3284,9 @@ type SnapshotResult struct {
 
 // SnapshotSummary provides counts at the snapshot point.
 type SnapshotSummary struct {
-	TotalActive       int `json:"total_active"`
-	BySignificance    map[string]int `json:"by_significance"`
-	ByStatus          map[string]int `json:"by_status"`
+	TotalActive    int            `json:"total_active"`
+	BySignificance map[string]int `json:"by_significance"`
+	ByStatus       map[string]int `json:"by_status"`
 }
 
 // SnapshotDiff shows what changed between snapshot and now.
@@ -3314,12 +3396,8 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 		// Update summary counts
 		out.Summary.TotalActive++
 		out.Summary.BySignificance[string(c.Significance)]++
-		// For status at snapshot time, we need to determine what status it had then
-		statusAtSnapshot := "hypothesis"
-		if c.Status == capsule.StatusVerified && (c.InvalidatedAt == nil || c.InvalidatedAt.After(snapshotTime)) {
-			statusAtSnapshot = "verified"
-		}
-		out.Summary.ByStatus[statusAtSnapshot]++
+		// Status is simply active (at that point in time, since we filtered out invalidated)
+		out.Summary.ByStatus["active"]++
 	}
 
 	// Compare to now if requested

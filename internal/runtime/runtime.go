@@ -21,6 +21,9 @@ type InvokeOptions struct {
 	OutputDir      string
 	Mode           InvokeMode
 	OnStart        func()
+	// MCPServerName and CardBinaryPath are used for non-interactive mode MCP config
+	MCPServerName  string
+	CardBinaryPath string
 }
 
 // Runtime represents a supported AI runtime.

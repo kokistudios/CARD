@@ -94,3 +94,14 @@ In the artifact, reference decisions by ID instead of writing `### Decision:` bl
 "As per [`<capsule_id>`], we'll structure the migration in three steps..."
 
 Set `origin: "agent"` for all planning decisions since this phase is non-interactive.
+
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "plan",
+  "status": "complete",
+  "summary": "Planning complete."
+})
+```

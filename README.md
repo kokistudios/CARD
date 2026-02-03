@@ -163,13 +163,9 @@ tags:
   - file:src/auth/guard.ts
   - authentication
   - architecture
-status: verified
 ```
 
-Capsules have three statuses:
-- **hypothesis** — Recorded during work, not yet confirmed
-- **verified** — Confirmed after session completion
-- **invalidated** — Superseded by a newer decision (with recorded learning)
+Capsules are **active by default**. When a decision is superseded or proven wrong, it becomes **invalidated** (with recorded learning about what changed).
 
 ## Automatic Recall
 

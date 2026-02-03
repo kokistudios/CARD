@@ -34,27 +34,20 @@ Working across {{len .Repos}} repositories:
 {{.OperatorContext}}
 {{end}}
 
-{{if .RecalledContext}}
-## Prior Context (from CARD recall)
-
-The following prior decisions and artifacts are relevant to this area:
-
-{{.RecalledContext}}
-{{end}}
-
 ## Investigation Process
 
 ### Phase 1: Deep Exploration (do this silently)
-1. **Read `CLAUDE.md` files** — Start with the root `CLAUDE.md` in each repository and any app-specific ones for architectural context. You can access all repos by their absolute paths listed above.
-2. **Map the full affected surface area** — Across ALL repositories in the session, identify files, modules, and systems relevant to this session's objective:
+1. **Query prior decisions** — Call `card_context` with `mode: "starting_task"` and `intent: "<brief description of work>"` to surface relevant prior decisions before investigating. This ensures you don't re-decide settled questions or miss important context.
+2. **Read `CLAUDE.md` files** — Start with the root `CLAUDE.md` in each repository and any app-specific ones for architectural context. You can access all repos by their absolute paths listed above.
+3. **Map the full affected surface area** — Across ALL repositories in the session, identify files, modules, and systems relevant to this session's objective:
    - Direct dependencies (what this code calls)
    - Reverse dependencies (what calls this code)
    - Data flows (where data originates, transforms, terminates)
    - Shared abstractions (interfaces, base classes, utilities used)
    - Test coverage (what tests exist for affected areas)
-3. **Understand upstream and downstream effects** — What systems feed into this area? What depends on the current behavior? What breaks if we change this?
-4. **Identify architectural patterns** — How does the existing codebase solve similar problems? What conventions must be followed?
-5. **Assess current state honestly** — What's the actual quality of the code in this area? Technical debt? Known issues?
+4. **Understand upstream and downstream effects** — What systems feed into this area? What depends on the current behavior? What breaks if we change this?
+5. **Identify architectural patterns** — How does the existing codebase solve similar problems? What conventions must be followed?
+6. **Assess current state honestly** — What's the actual quality of the code in this area? Technical debt? Known issues?
 
 ### Phase 2: Structured Dialogue (this is the core of investigation)
 

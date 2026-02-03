@@ -83,7 +83,7 @@ func TestRenderSessionWidePrompt(t *testing.T) {
 	}
 
 	for _, p := range Sequence() {
-		prompt, err := RenderSessionWidePrompt(s, sess, p, "/tmp/card-work", "", nil)
+		prompt, err := RenderSessionWidePrompt(s, sess, p, "/tmp/card-work", nil)
 		if err != nil {
 			t.Errorf("RenderSessionWidePrompt(%q) error: %v", p, err)
 			continue

@@ -3,9 +3,10 @@ package runtime
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	ossignal "os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -74,7 +75,10 @@ func codexAvailableAt(path string) error {
 func (c *CodexRuntime) invokeInteractive(codexPath string, env []string, opts InvokeOptions) error {
 	prompt := codexPrompt(opts.SystemPrompt, opts.InitialMessage)
 	sandbox := MapToolsToSandbox(opts.AllowedTools)
-	args := []string{"--sandbox", sandbox}
+	// Use --no-alt-screen to run in inline mode, preventing TUI conflicts with CARD's
+	// phase banners. Without this, Codex's alternate screen mode causes display corruption
+	// when CARD prints UI elements before/after runtime invocation.
+	args := []string{"--no-alt-screen", "--sandbox", sandbox}
 	if prompt != "" {
 		args = append(args, prompt)
 	}
@@ -127,6 +131,7 @@ func (c *CodexRuntime) invokeInteractive(codexPath string, env []string, opts In
 						<-doneCh
 					}
 
+					codexResetTerminal()
 					return ErrPhaseComplete
 				}
 			}
@@ -140,30 +145,97 @@ func (c *CodexRuntime) invokeInteractive(codexPath string, env []string, opts In
 func (c *CodexRuntime) invokeNonInteractive(codexPath string, env []string, opts InvokeOptions) error {
 	prompt := codexPrompt(opts.SystemPrompt, opts.InitialMessage)
 	sandbox := MapToolsToSandbox(opts.AllowedTools)
-	args := []string{"exec", prompt, "--json", "--sandbox", sandbox}
+	// Use exec with --full-auto for approval-free non-interactive execution.
+	// Pass prompt via stdin with "-" to avoid command-line length limits.
+	args := []string{"exec", "--full-auto", "--sandbox", sandbox, "-"}
 
 	cmd := exec.Command(codexPath, args...)
 	if opts.WorkingDir != "" {
 		cmd.Dir = opts.WorkingDir
 	}
 	cmd.Env = env
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	cmd.Stdin = strings.NewReader(prompt)
+	// Keep stdout/stderr visible so we can see progress and debug issues
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start codex: %w", err)
 	}
-	if err := cmd.Wait(); err != nil {
-		if codexIsInterrupt(err) {
-			return ErrInterrupted
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- cmd.Wait()
+	}()
+
+	// Set up signal handling for Ctrl+C during non-interactive mode.
+	// Since Codex isn't connected to the terminal, SIGINT goes to CARD.
+	// We need to catch it and terminate Codex gracefully.
+	sigCh := make(chan os.Signal, 1)
+	ossignal.Notify(sigCh, os.Interrupt)
+	defer ossignal.Stop(sigCh)
+
+	// Poll for phase complete signal, same as interactive mode
+	if opts.OutputDir != "" {
+		ticker := time.NewTicker(codexSignalPollInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case err := <-doneCh:
+				return codexHandleProcessExit(err)
+
+			case <-sigCh:
+				// Ctrl+C received - terminate Codex and return interrupted
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+				select {
+				case <-doneCh:
+				case <-time.After(codexSignalGracePeriod):
+					_ = cmd.Process.Kill()
+					<-doneCh
+				}
+				codexResetTerminal()
+				return ErrInterrupted
+
+			case <-ticker.C:
+				sig, sigErr := signal.CheckPhaseComplete(opts.OutputDir)
+				if sigErr != nil {
+					continue
+				}
+				if sig != nil && sig.Status == "complete" {
+					_ = cmd.Process.Signal(syscall.SIGTERM)
+
+					select {
+					case <-doneCh:
+					case <-time.After(codexSignalGracePeriod):
+						_ = cmd.Process.Kill()
+						<-doneCh
+					}
+
+					codexResetTerminal()
+					return ErrPhaseComplete
+				}
+			}
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("codex exited with code %d", exitErr.ExitCode())
-		}
-		return fmt.Errorf("failed to run codex: %w", err)
 	}
 
-	return nil
+	// No OutputDir - still need to handle Ctrl+C
+	for {
+		select {
+		case err := <-doneCh:
+			return codexHandleProcessExit(err)
+		case <-sigCh:
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			select {
+			case <-doneCh:
+			case <-time.After(codexSignalGracePeriod):
+				_ = cmd.Process.Kill()
+				<-doneCh
+			}
+			codexResetTerminal()
+			return ErrInterrupted
+		}
+	}
 }
 
 func codexPrompt(systemPrompt, initialMessage string) string {
@@ -178,6 +250,11 @@ func codexPrompt(systemPrompt, initialMessage string) string {
 }
 
 func codexHandleProcessExit(err error) error {
+	// Reset terminal state after Codex exits. Codex's TUI can leave the terminal
+	// in raw mode where \n doesn't include carriage return, causing CARD's
+	// lipgloss-rendered boxes to display with characters pushed to the right.
+	codexResetTerminal()
+
 	if err == nil {
 		return nil
 	}
@@ -188,6 +265,19 @@ func codexHandleProcessExit(err error) error {
 		return fmt.Errorf("codex exited with code %d", exitErr.ExitCode())
 	}
 	return fmt.Errorf("failed to run codex: %w", err)
+}
+
+// codexResetTerminal resets the terminal to a sane state after Codex exits.
+// This fixes display corruption where lipgloss boxes render incorrectly because
+// the terminal was left in raw mode (where \n doesn't reset cursor to column 0).
+func codexResetTerminal() {
+	// Use stty sane to reset terminal to normal cooked mode
+	cmd := exec.Command("stty", "sane")
+	cmd.Stdin = os.Stdin
+	_ = cmd.Run()
+
+	// Also print reset escape sequence and carriage return to be safe
+	fmt.Fprint(os.Stderr, "\033[0m\r")
 }
 
 func codexIsInterrupt(err error) bool {

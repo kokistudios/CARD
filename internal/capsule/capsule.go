@@ -17,13 +17,12 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// CapsuleStatus represents the verification state of a capsule.
+// CapsuleStatus represents the state of a capsule.
+// Capsules are active by default (empty status). Only invalidated capsules have a status set.
 type CapsuleStatus string
 
 const (
-	StatusHypothesis  CapsuleStatus = "hypothesis"  // Unverified conclusion
-	StatusVerified    CapsuleStatus = "verified"    // Confirmed by verification phase
-	StatusInvalidated CapsuleStatus = "invalidated" // Proven wrong or outdated
+	StatusInvalidated CapsuleStatus = "invalidated" // Superseded or proven wrong
 )
 
 // CapsuleType distinguishes decisions from findings.
@@ -111,7 +110,7 @@ type Filter struct {
 	Phase              *string
 	FilePath           *string       // match against Tags
 	Tag                *string       // match against Tags
-	Status             *CapsuleStatus // filter by status (verified, hypothesis, invalidated)
+	Status             *CapsuleStatus // filter by status (only 'invalidated' is meaningful; empty = active)
 	Type               *CapsuleType   // filter by type (decision, finding)
 	Significance       *Significance  // filter by significance tier
 	IncludeInvalidated bool          // if true, include invalidated capsules (default: exclude)
@@ -185,12 +184,10 @@ func ExtractFromArtifact(art *artifact.Artifact) ([]Capsule, error) {
 			c.Source = "agent"
 		}
 
-		// Parse status (default to hypothesis for new capsules)
+		// Parse status (empty = active, only "invalidated" is meaningful)
 		statusStr := extractField(block, "Status")
 		if statusStr != "" {
 			c.Status = CapsuleStatus(strings.ToLower(statusStr))
-		} else {
-			c.Status = StatusHypothesis
 		}
 
 		// Parse type (infer from alternatives: has alternatives = decision, no alternatives = finding)
@@ -221,6 +218,7 @@ func extractField(block, label string) string {
 }
 
 // splitCSV splits a comma-separated string into trimmed parts.
+// Also strips backticks which may be present from markdown formatting.
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -229,6 +227,7 @@ func splitCSV(s string) []string {
 	var result []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
+		p = strings.Trim(p, "`") // Strip backticks from markdown
 		if p != "" {
 			result = append(result, p)
 		}
@@ -271,8 +270,8 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
-	// Group by phase
-	phaseOrder := []string{"ask", "investigate", "plan", "execute", "simplify", "record"}
+	// Group by phase (includes all session phases + ask for ask sessions)
+	phaseOrder := []string{"ask", "investigate", "investigating", "plan", "planning", "review", "reviewing", "execute", "executing", "verify", "verifying", "simplify", "simplifying", "record", "recording", "conclude"}
 	byPhase := make(map[string][]Capsule)
 	for _, c := range capsules {
 		byPhase[c.Phase] = append(byPhase[c.Phase], c)
@@ -463,12 +462,10 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				}
 			}
 
-			// Parse status
+			// Parse status (empty = active, only "invalidated" is meaningful)
 			statusStr := extractField(decBlock, "Status")
 			if statusStr != "" {
 				c.Status = CapsuleStatus(strings.ToLower(statusStr))
-			} else {
-				c.Status = StatusHypothesis
 			}
 
 			// Parse type
@@ -693,6 +690,115 @@ func ListTags(st *store.Store) ([]string, error) {
 	return tags, nil
 }
 
+// BacktickIssue represents a session with backticks in capsule tags.
+type BacktickIssue struct {
+	SessionID string
+	FilePath  string
+	Count     int // Number of backtick-wrapped tags found
+}
+
+// CheckBackticksInTags scans all capsule files for tags containing backticks.
+// Checks the raw file content since splitCSV strips backticks during parsing.
+func CheckBackticksInTags(st *store.Store) ([]BacktickIssue, error) {
+	sessionsDir := st.Path("sessions")
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read sessions: %w", err)
+	}
+
+	// Pattern matches tags line with backtick-wrapped values: - **Tags:** `foo`, `bar`
+	tagLineRe := regexp.MustCompile(`(?m)^- \*\*Tags:\*\*\s+(.+)$`)
+	backtickRe := regexp.MustCompile("`[^`]+`")
+
+	var issues []BacktickIssue
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+
+		p := capsulesFilePath(st, e.Name())
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+
+		content := string(data)
+		matches := tagLineRe.FindAllStringSubmatch(content, -1)
+
+		backtickCount := 0
+		for _, m := range matches {
+			if len(m) > 1 {
+				backtickCount += len(backtickRe.FindAllString(m[1], -1))
+			}
+		}
+
+		if backtickCount > 0 {
+			issues = append(issues, BacktickIssue{
+				SessionID: e.Name(),
+				FilePath:  p,
+				Count:     backtickCount,
+			})
+		}
+	}
+
+	return issues, nil
+}
+
+// FixBackticksInTags removes backticks from all capsule tags in the raw files.
+// Returns the number of sessions fixed.
+func FixBackticksInTags(st *store.Store) (int, error) {
+	sessionsDir := st.Path("sessions")
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read sessions: %w", err)
+	}
+
+	// Pattern matches tags line: - **Tags:** `foo`, `bar`
+	tagLineRe := regexp.MustCompile(`(?m)^(- \*\*Tags:\*\*\s+)(.+)$`)
+
+	totalFixed := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+
+		p := capsulesFilePath(st, e.Name())
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+
+		content := string(data)
+		original := content
+
+		// Replace each tags line, stripping backticks from values
+		content = tagLineRe.ReplaceAllStringFunc(content, func(line string) string {
+			m := tagLineRe.FindStringSubmatch(line)
+			if len(m) < 3 {
+				return line
+			}
+			prefix := m[1]
+			tagsValue := m[2]
+
+			// Strip backticks from each tag value
+			// Match `value` and replace with just value
+			backtickRe := regexp.MustCompile("`([^`]+)`")
+			cleanedTags := backtickRe.ReplaceAllString(tagsValue, "$1")
+
+			return prefix + cleanedTags
+		})
+
+		if content != original {
+			if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+				return totalFixed, fmt.Errorf("failed to write session %s: %w", e.Name(), err)
+			}
+			totalFixed++
+		}
+	}
+
+	return totalFixed, nil
+}
+
 // LinkCommits updates a capsule with commit SHAs.
 func LinkCommits(st *store.Store, id string, commits []string) error {
 	c, err := Get(st, id)
@@ -783,39 +889,6 @@ func matchesFilter(c *Capsule, f Filter) bool {
 	return true
 }
 
-// Verify marks a capsule as verified.
-func Verify(st *store.Store, id string) error {
-	c, err := Get(st, id)
-	if err != nil {
-		return err
-	}
-	c.Status = StatusVerified
-	return Store(st, *c)
-}
-
-// VerifySessionCapsules marks all capsules from a specific phase in a session as verified.
-func VerifySessionCapsules(st *store.Store, sessionID, phase string) (int, error) {
-	p := capsulesFilePath(st, sessionID)
-	capsules, err := loadConsolidatedFile(p)
-	if err != nil {
-		return 0, fmt.Errorf("no capsules found for session %s: %w", sessionID, err)
-	}
-
-	count := 0
-	for i := range capsules {
-		if capsules[i].Phase == phase && capsules[i].Status != StatusVerified {
-			capsules[i].Status = StatusVerified
-			count++
-		}
-	}
-
-	if count > 0 {
-		if err := writeConsolidatedFile(p, sessionID, capsules); err != nil {
-			return 0, err
-		}
-	}
-	return count, nil
-}
 
 // Invalidate marks a capsule as invalidated and optionally links to its replacement.
 // The learned parameter captures what was learned from the invalidation (distinct from reason).
@@ -905,23 +978,17 @@ func GetChain(st *store.Store, id string) (*ChainResult, error) {
 	return result, nil
 }
 
-// StatusLabel returns a human-readable label for display.
+// Label returns a human-readable label for display.
 func (s CapsuleStatus) Label() string {
-	switch s {
-	case StatusVerified:
-		return "[verified]"
-	case StatusHypothesis:
-		return "[hypothesis]"
-	case StatusInvalidated:
+	if s == StatusInvalidated {
 		return "[invalidated]"
-	default:
-		return "[unknown]"
 	}
+	return "" // Active capsules have no label
 }
 
-// IsValid returns true if this is a trustworthy status (verified or hypothesis).
-func (s CapsuleStatus) IsValid() bool {
-	return s == StatusVerified || s == StatusHypothesis
+// IsActive returns true if this capsule is active (not invalidated).
+func (s CapsuleStatus) IsActive() bool {
+	return s != StatusInvalidated
 }
 
 // EnrichTagsFromManifest adds file: tags from a milestone_ledger file manifest.

@@ -61,7 +61,7 @@ A decision has:
 - **Alternatives** (what was considered)
 - A **rationale** (why this choice)
 - **Tags** (files, concepts, domains it relates to)
-- A **status** (hypothesis, verified, invalidated)
+- A **status** (active by default, or invalidated when superseded)
 
 Everything else in CARD exists to produce, store, or query decisions.
 
