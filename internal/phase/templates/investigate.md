@@ -131,22 +131,38 @@ Followed by the investigation summary with these sections:
 - **Adjacent Concerns** (things that might be affected but are out of scope)
 - **Decisions** (see format below)
 
-## Decision Capsule Format
+## Decision Capture
 
-For every significant decision made during investigation, include a `## Decisions` section with one or more entries in this exact format:
+When you make or identify a decision during this phase, **record it immediately using the `card_decision` MCP tool** instead of writing decision blocks to artifacts.
 
-```markdown
-## Decisions
+### Determine Significance First
 
-### Decision: <what was being decided>
-- **Choice:** <what was chosen>
-- **Alternatives:** <option A>, <option B>, ...
-- **Rationale:** <why this choice>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
-```
+- **architectural**: Trade-offs, multiple viable alternatives, shapes future work
+  → Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+- **implementation**: Pattern-following, obvious choices, easily reversible
+  → Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+- **context**: Facts discovered, constraints, not really decisions
+  → Use `card_decision` with `significance: "context"`, `require_confirmation: false`
 
-Only capture decisions that were actually discussed and decided. Mark `Source: human` only for decisions the developer explicitly made. Mark `Source: agent` for your own recommendations that went uncontested.
+### For ARCHITECTURAL decisions:
+
+1. Call `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+2. Review the response for similar/contradicting decisions
+3. Present to the developer: "I recommend X because Y. This contradicts/relates to Z. Agree?"
+4. After confirmation, call `card_decision_confirm`
+
+### For IMPLEMENTATION/CONTEXT decisions:
+
+1. Call `card_decision` with appropriate significance, `require_confirmation: false`
+2. Continue without waiting — stored immediately
+3. These surface in batch review at phase end (optional)
+
+### In the artifact, reference decisions by ID:
+
+Instead of writing `### Decision:` blocks, reference the capsule IDs:
+"As decided in [`<capsule_id>`], we're using the repository directly..."
+
+Only capture decisions that were actually discussed and decided. Set `origin: "human"` only for decisions the developer explicitly made. Set `origin: "agent"` for your own recommendations.
 
 ## Multi-Repo Signal
 

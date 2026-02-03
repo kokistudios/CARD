@@ -34,6 +34,23 @@ const (
 	TypeFinding  CapsuleType = "finding"  // Observation or conclusion (no alternatives)
 )
 
+// Significance represents the impact tier of a decision.
+type Significance string
+
+const (
+	SignificanceArchitectural   Significance = "architectural"   // Trade-offs, multiple viable alternatives, shapes future work
+	SignificanceImplementation  Significance = "implementation"  // Pattern-following, obvious choices, easily reversible
+	SignificanceContext         Significance = "context"         // Facts discovered, constraints identified, not really decisions
+)
+
+// Confirmation indicates how the decision was confirmed.
+type Confirmation string
+
+const (
+	ConfirmationExplicit Confirmation = "explicit" // Human explicitly confirmed via card_decision_confirm
+	ConfirmationImplicit Confirmation = "implicit" // Stored immediately without human confirmation
+)
+
 // Challenge records when a capsule's validity was questioned.
 type Challenge struct {
 	Timestamp  time.Time `yaml:"timestamp"`
@@ -54,7 +71,7 @@ type Capsule struct {
 	Choice       string    `yaml:"choice"`
 	Alternatives []string  `yaml:"alternatives,omitempty"`
 	Rationale    string    `yaml:"rationale"`
-	Source       string    `yaml:"source,omitempty"` // "human" or "agent"
+	Source       string    `yaml:"source,omitempty"` // "human" or "agent" (legacy, use Origin)
 	Tags         []string  `yaml:"tags,omitempty"`
 	Commits      []string  `yaml:"commits,omitempty"`
 
@@ -62,9 +79,26 @@ type Capsule struct {
 	Status CapsuleStatus `yaml:"status,omitempty"`
 	Type   CapsuleType   `yaml:"type,omitempty"`
 
+	// Decision system redesign fields
+	Significance  Significance `yaml:"significance,omitempty"`  // architectural, implementation, context
+	PatternID     string       `yaml:"pattern_id,omitempty"`    // Links to pattern this established/follows
+	Origin        string       `yaml:"origin,omitempty"`        // "human" or "agent" (replaces Source)
+	Confirmation  Confirmation `yaml:"confirmation,omitempty"`  // explicit, implicit
+	CreatedAt     time.Time    `yaml:"created_at,omitempty"`    // When capsule was created (for temporal queries)
+	InvalidatedAt *time.Time   `yaml:"invalidated_at,omitempty"` // When capsule was invalidated
+
+	// Dependency graph
+	Enables    []string `yaml:"enables,omitempty"`    // Capsule IDs this decision enables
+	EnabledBy  string   `yaml:"enabled_by,omitempty"` // Capsule ID that enabled this decision
+	Constrains []string `yaml:"constrains,omitempty"` // Capsule IDs whose choices this limits
+
 	// Supersession relationships
 	SupersededBy string   `yaml:"superseded_by,omitempty"` // Capsule ID that replaces this
 	Supersedes   []string `yaml:"supersedes,omitempty"`    // Capsule IDs this replaces
+
+	// Invalidation metadata
+	InvalidationReason string `yaml:"invalidation_reason,omitempty"` // Why this decision was invalidated
+	Learned            string `yaml:"learned,omitempty"`             // Insight gained from invalidation
 
 	// Challenge history
 	Challenges []Challenge `yaml:"challenges,omitempty"`
@@ -72,14 +106,16 @@ type Capsule struct {
 
 // Filter defines query parameters for listing capsules.
 type Filter struct {
-	SessionID     *string
-	RepoID        *string       // matches against any entry in RepoIDs
-	Phase         *string
-	FilePath      *string       // match against Tags
-	Tag           *string       // match against Tags
-	Status        *CapsuleStatus // filter by status (verified, hypothesis, invalidated)
-	Type          *CapsuleType   // filter by type (decision, finding)
-	ShowEvolution bool          // if false (default), deduplicate to latest phase per question
+	SessionID          *string
+	RepoID             *string       // matches against any entry in RepoIDs
+	Phase              *string
+	FilePath           *string       // match against Tags
+	Tag                *string       // match against Tags
+	Status             *CapsuleStatus // filter by status (verified, hypothesis, invalidated)
+	Type               *CapsuleType   // filter by type (decision, finding)
+	Significance       *Significance  // filter by significance tier
+	IncludeInvalidated bool          // if true, include invalidated capsules (default: exclude)
+	ShowEvolution      bool          // if false (default), deduplicate to latest phase per question
 }
 
 // GenerateID creates a deterministic capsule ID from session, phase, and question.
@@ -90,6 +126,12 @@ func GenerateID(sessionID, phase, question string) string {
 }
 
 // ExtractFromArtifact parses decision capsules from an artifact's markdown body.
+//
+// DEPRECATED: This function implements the legacy "document → extract" model.
+// New decisions should be captured using the card_decision MCP tool, which stores
+// capsules immediately without requiring post-phase extraction.
+// This function is retained for backward compatibility with older sessions that
+// used the "### Decision:" markdown format in artifacts.
 func ExtractFromArtifact(art *artifact.Artifact) ([]Capsule, error) {
 	if art == nil {
 		return nil, fmt.Errorf("artifact is nil")
@@ -238,11 +280,11 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 
 	var buf bytes.Buffer
 	buf.WriteString("---\n")
-	buf.WriteString(fmt.Sprintf("session: %s\n", sessionID))
+	fmt.Fprintf(&buf, "session: %s\n", sessionID)
 	buf.WriteString("type: capsules\n")
 	buf.WriteString("---\n\n")
 	buf.WriteString("# Decision Capsules\n\n")
-	buf.WriteString(fmt.Sprintf("**Session:** [[%s]]\n\n", sessionID))
+	fmt.Fprintf(&buf, "**Session:** [[%s]]\n\n", sessionID)
 
 	for _, phase := range phaseOrder {
 		phaseCaps, ok := byPhase[phase]
@@ -250,40 +292,81 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 			continue
 		}
 
-		buf.WriteString(fmt.Sprintf("## %s\n\n", phase))
+		fmt.Fprintf(&buf, "## %s\n\n", phase)
 
 		for _, c := range phaseCaps {
-			buf.WriteString(fmt.Sprintf("### Decision: %s\n", c.Question))
-			buf.WriteString(fmt.Sprintf("- **ID:** %s\n", c.ID))
-			buf.WriteString(fmt.Sprintf("- **Choice:** %s\n", c.Choice))
+			fmt.Fprintf(&buf, "### Decision: %s\n", c.Question)
+			fmt.Fprintf(&buf, "- **ID:** %s\n", c.ID)
+			fmt.Fprintf(&buf, "- **Choice:** %s\n", c.Choice)
 			if len(c.Alternatives) > 0 {
-				buf.WriteString(fmt.Sprintf("- **Alternatives:** %s\n", strings.Join(c.Alternatives, ", ")))
+				fmt.Fprintf(&buf, "- **Alternatives:** %s\n", strings.Join(c.Alternatives, ", "))
 			}
-			buf.WriteString(fmt.Sprintf("- **Rationale:** %s\n", c.Rationale))
-			buf.WriteString(fmt.Sprintf("- **Source:** %s\n", c.Source))
+			fmt.Fprintf(&buf, "- **Rationale:** %s\n", c.Rationale)
+			// Write Origin if set, otherwise fall back to Source for backwards compatibility
+			origin := c.Origin
+			if origin == "" {
+				origin = c.Source
+			}
+			if origin != "" {
+				fmt.Fprintf(&buf, "- **Origin:** %s\n", origin)
+			}
 			if c.Status != "" {
-				buf.WriteString(fmt.Sprintf("- **Status:** %s\n", c.Status))
+				fmt.Fprintf(&buf, "- **Status:** %s\n", c.Status)
 			}
 			if c.Type != "" {
-				buf.WriteString(fmt.Sprintf("- **Type:** %s\n", c.Type))
+				fmt.Fprintf(&buf, "- **Type:** %s\n", c.Type)
+			}
+			// New decision system redesign fields
+			if c.Significance != "" {
+				fmt.Fprintf(&buf, "- **Significance:** %s\n", c.Significance)
+			}
+			if c.Confirmation != "" {
+				fmt.Fprintf(&buf, "- **Confirmation:** %s\n", c.Confirmation)
+			}
+			if c.PatternID != "" {
+				fmt.Fprintf(&buf, "- **PatternID:** %s\n", c.PatternID)
 			}
 			if len(c.Tags) > 0 {
-				buf.WriteString(fmt.Sprintf("- **Tags:** %s\n", strings.Join(c.Tags, ", ")))
+				fmt.Fprintf(&buf, "- **Tags:** %s\n", strings.Join(c.Tags, ", "))
 			}
 			if !c.Timestamp.IsZero() {
-				buf.WriteString(fmt.Sprintf("- **Timestamp:** %s\n", c.Timestamp.Format(time.RFC3339)))
+				fmt.Fprintf(&buf, "- **Timestamp:** %s\n", c.Timestamp.Format(time.RFC3339))
+			}
+			if !c.CreatedAt.IsZero() {
+				fmt.Fprintf(&buf, "- **CreatedAt:** %s\n", c.CreatedAt.Format(time.RFC3339))
+			}
+			if c.InvalidatedAt != nil {
+				fmt.Fprintf(&buf, "- **InvalidatedAt:** %s\n", c.InvalidatedAt.Format(time.RFC3339))
 			}
 			if len(c.RepoIDs) > 0 {
-				buf.WriteString(fmt.Sprintf("- **Repos:** %s\n", strings.Join(c.RepoIDs, ", ")))
+				fmt.Fprintf(&buf, "- **Repos:** %s\n", strings.Join(c.RepoIDs, ", "))
 			}
 			if len(c.Commits) > 0 {
-				buf.WriteString(fmt.Sprintf("- **Commits:** %s\n", strings.Join(c.Commits, ", ")))
+				fmt.Fprintf(&buf, "- **Commits:** %s\n", strings.Join(c.Commits, ", "))
 			}
+			// Dependency graph
+			if c.EnabledBy != "" {
+				fmt.Fprintf(&buf, "- **EnabledBy:** %s\n", c.EnabledBy)
+			}
+			if len(c.Enables) > 0 {
+				fmt.Fprintf(&buf, "- **Enables:** %s\n", strings.Join(c.Enables, ", "))
+			}
+			if len(c.Constrains) > 0 {
+				fmt.Fprintf(&buf, "- **Constrains:** %s\n", strings.Join(c.Constrains, ", "))
+			}
+			// Supersession
 			if c.SupersededBy != "" {
-				buf.WriteString(fmt.Sprintf("- **SupersededBy:** %s\n", c.SupersededBy))
+				fmt.Fprintf(&buf, "- **SupersededBy:** %s\n", c.SupersededBy)
 			}
 			if len(c.Supersedes) > 0 {
-				buf.WriteString(fmt.Sprintf("- **Supersedes:** %s\n", strings.Join(c.Supersedes, ", ")))
+				fmt.Fprintf(&buf, "- **Supersedes:** %s\n", strings.Join(c.Supersedes, ", "))
+			}
+			// Invalidation metadata
+			if c.InvalidationReason != "" {
+				fmt.Fprintf(&buf, "- **InvalidationReason:** %s\n", c.InvalidationReason)
+			}
+			if c.Learned != "" {
+				fmt.Fprintf(&buf, "- **Learned:** %s\n", c.Learned)
 			}
 			buf.WriteString("\n")
 		}
@@ -398,6 +481,60 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				c.Type = TypeFinding
 			}
 
+			// Parse new decision system redesign fields
+			// Origin (replaces Source, but read both for backwards compatibility)
+			c.Origin = extractField(decBlock, "Origin")
+			if c.Origin == "" && c.Source != "" {
+				c.Origin = c.Source // Migrate Source to Origin
+			}
+
+			// Significance (default to implementation for backwards compatibility)
+			sigStr := extractField(decBlock, "Significance")
+			if sigStr != "" {
+				c.Significance = Significance(strings.ToLower(sigStr))
+			} else {
+				c.Significance = SignificanceImplementation // Default for legacy capsules
+			}
+
+			// Confirmation (default to implicit for backwards compatibility)
+			confStr := extractField(decBlock, "Confirmation")
+			if confStr != "" {
+				c.Confirmation = Confirmation(strings.ToLower(confStr))
+			} else {
+				c.Confirmation = ConfirmationImplicit // Default for legacy capsules
+			}
+
+			c.PatternID = extractField(decBlock, "PatternID")
+
+			// Parse CreatedAt (fall back to Timestamp if not set)
+			createdAtStr := extractField(decBlock, "CreatedAt")
+			if createdAtStr != "" {
+				if t, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+					c.CreatedAt = t
+				}
+			} else if !c.Timestamp.IsZero() {
+				c.CreatedAt = c.Timestamp // Migrate Timestamp to CreatedAt
+			}
+
+			// Parse InvalidatedAt
+			invalidatedAtStr := extractField(decBlock, "InvalidatedAt")
+			if invalidatedAtStr != "" {
+				if t, err := time.Parse(time.RFC3339, invalidatedAtStr); err == nil {
+					c.InvalidatedAt = &t
+				}
+			}
+
+			// Dependency graph
+			c.EnabledBy = extractField(decBlock, "EnabledBy")
+			enables := extractField(decBlock, "Enables")
+			if enables != "" {
+				c.Enables = splitCSV(enables)
+			}
+			constrains := extractField(decBlock, "Constrains")
+			if constrains != "" {
+				c.Constrains = splitCSV(constrains)
+			}
+
 			// Parse supersession relationships
 			c.SupersededBy = extractField(decBlock, "SupersededBy")
 			supersedes := extractField(decBlock, "Supersedes")
@@ -405,11 +542,18 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				c.Supersedes = splitCSV(supersedes)
 			}
 
+			// Invalidation metadata
+			c.InvalidationReason = extractField(decBlock, "InvalidationReason")
+			c.Learned = extractField(decBlock, "Learned")
+
 			if c.ID == "" {
 				c.ID = GenerateID(sessionID, phase, question)
 			}
 			if c.Source == "" {
 				c.Source = "agent"
+			}
+			if c.Origin == "" {
+				c.Origin = "agent"
 			}
 
 			capsules = append(capsules, c)
@@ -602,6 +746,14 @@ func matchesFilter(c *Capsule, f Filter) bool {
 		return false
 	}
 	if f.Type != nil && c.Type != *f.Type {
+		return false
+	}
+	// Filter by significance tier
+	if f.Significance != nil && c.Significance != *f.Significance {
+		return false
+	}
+	// Exclude invalidated capsules unless explicitly requested
+	if !f.IncludeInvalidated && c.Status == StatusInvalidated {
 		return false
 	}
 	if f.Tag != nil {

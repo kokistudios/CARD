@@ -175,28 +175,21 @@ Include these sections:
 
 The execution log is critical — it's the handoff artifact that preserves implementation context and enables honest verification.
 
-### Decision Capsules
+### Decision Capture
 
-{{if .PriorArtifactContent}}
-If you deviated from the plan or made implementation decisions, include a `## Decisions` section:
-{{else}}
-Document any significant decisions made during this quickfix in a `## Decisions` section:
-{{end}}
+When you make decisions during execution (deviations, runtime choices), **record them immediately using the `card_decision` MCP tool**.
 
-```markdown
-### Decision: <what was being decided>
-- **Choice:** <what was chosen>
-- **Alternatives:** <option A>, <option B>, ...
-- **Rationale:** <why this choice>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
-```
+**For ARCHITECTURAL decisions** (significant deviations, trade-offs):
+- Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+- Present to developer before proceeding
 
-{{if .PriorArtifactContent}}
-Only capture decisions that were actually made during execution (deviations, runtime choices). Mark `Source: human` only for decisions the developer explicitly made. Mark `Source: agent` for your own implementation decisions.
-{{else}}
-Capture decisions about the fix approach, implementation choices, and any trade-offs. Mark `Source: human` for decisions the developer explicitly made. Mark `Source: agent` for your own implementation decisions.
-{{end}}
+**For IMPLEMENTATION decisions** (minor adjustments, obvious choices):
+- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+
+In the artifact, reference decisions by ID:
+"Deviated from plan per [`<capsule_id>`]: used async approach instead of synchronous..."
+
+Set `origin: "human"` only for decisions the developer explicitly made. Set `origin: "agent"` for your own implementation decisions.
 
 After writing the artifact, tell the developer: **"Execution log written. To continue the CARD flow, press Ctrl+C twice."**
 

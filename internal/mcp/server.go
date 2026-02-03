@@ -22,13 +22,17 @@ import (
 
 // Server wraps the MCP server with CARD's store.
 type Server struct {
-	store  *store.Store
-	server *mcp.Server
+	store     *store.Store
+	server    *mcp.Server
+	proposals *ProposalStore // Stores pending decision proposals awaiting confirmation
 }
 
 // NewServer creates a new CARD MCP server.
 func NewServer(st *store.Store, version string) *Server {
-	s := &Server{store: st}
+	s := &Server{
+		store:     st,
+		proposals: NewProposalStore(),
+	}
 
 	impl := &mcp.Implementation{
 		Name:    "card",
@@ -37,6 +41,9 @@ func NewServer(st *store.Store, version string) *Server {
 
 	s.server = mcp.NewServer(impl, nil)
 	s.registerTools()
+
+	// Start proposal cleanup routine (clean expired proposals every 5 minutes)
+	s.proposals.StartCleanupRoutine(5 * time.Minute)
 
 	return s
 }
@@ -48,42 +55,6 @@ func (s *Server) Run(ctx context.Context) error {
 
 // registerTools adds all CARD tools to the MCP server.
 func (s *Server) registerTools() {
-	// card_recall - query CARD's memory for relevant context
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name:        "card_recall",
-		Description: "Search CARD's engineering memory for prior decisions. START HERE for discovery - returns compact summaries (id, question, choice, rationale, tags). Use card_capsule_show to drill down on specific decisions, or card_session_artifacts for full session context. Searches across all repos unless repo is specified. SMART DEFAULT: Call with no params to get the 15 most recent decisions. PROACTIVE USE: Call this at the start of any coding task to understand prior context.",
-	}, s.handleRecall)
-
-	// card_capsule_show - get full details of a specific capsule
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name:        "card_capsule_show",
-		Description: "Get full details of a decision capsule by ID. Use after card_recall to drill down on a specific decision - includes alternatives considered, full rationale, linked commits.",
-	}, s.handleCapsuleShow)
-
-	// card_sessions - list sessions for a repo
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name:        "card_sessions",
-		Description: "List CARD sessions for a repository. Sessions represent units of work (features, bug fixes, refactors) that may span multiple commits. Use this to understand the history of work on a repo or find sessions to explore further.",
-	}, s.handleSessions)
-
-	// card_session_artifacts - get artifacts from a session
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name:        "card_session_artifacts",
-		Description: "Get session artifacts. For ACTIVE sessions: returns milestone_ledger, execution_log, and verification_notes (can be 500+ lines total). For COMPLETED sessions: only milestone_ledger persists — execution logs are ephemeral and cleaned up after completion. Use card_recall for queryable decisions, milestone_ledger for file manifest and patterns. Use this for deep dives into implementation details, SQL queries, verification checklists during active sessions.",
-	}, s.handleSessionArtifacts)
-
-	// card_session_execution_history - get all versioned execution logs
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name:        "card_session_execution_history",
-		Description: "Get FULL execution history for a session - ALL versioned execution logs and verification notes across re-execution attempts. Use this when you need to understand the evolution of implementation across multiple attempts, what was tried and why it failed, or detailed context on how a feature was built iteratively. Returns array of attempts with execution_log and verification_notes for each. WARNING: Can be very large (1000+ lines) for sessions with many re-executions. NOTE: For completed sessions, execution logs are cleaned up — use card_recall for decisions and milestone_ledger for file manifest and patterns.",
-	}, s.handleSessionExecutionHistory)
-
-	// card_tags_list - discover available tags
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name:        "card_tags_list",
-		Description: "List all unique tags from CARD's decision capsules. Use this to discover what tags exist before searching with card_recall. Returns file paths, concepts, and domain tags.",
-	}, s.handleTagsList)
-
 	// card_quickfix_start - promote ask discovery to recorded session
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_quickfix_start",
@@ -106,70 +77,6 @@ func (s *Server) registerTools() {
 			"If no session_id provided, finds the most recent active session.",
 	}, s.handleRecord)
 
-	// card_file_context - get decisions related to specific files
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_file_context",
-		Description: "Get all CARD decisions related to specific files. This is the single most useful query " +
-			"before touching a file - returns capsule count, status summary, and relevant decisions. " +
-			"PROACTIVE USE: Call this BEFORE reading or editing any file to surface prior decisions. " +
-			"Don't wait for the user to ask - push relevant context proactively.",
-	}, s.handleFileContext)
-
-	// card_capsule_chain - navigate supersession relationships
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_capsule_chain",
-		Description: "Navigate the supersession chain for a capsule. Shows what decisions this capsule " +
-			"supersedes (older, invalidated) and what supersedes it (newer, if invalidated). " +
-			"Use this to understand the evolution of a decision over time.",
-	}, s.handleCapsuleChain)
-
-	// card_invalidate - mark a decision as invalidated with reasoning
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_invalidate",
-		Description: "Mark a decision capsule as invalidated with full reasoning. " +
-			"USE THIS when a prior decision has been proven wrong, requirements changed, or a better approach emerged. " +
-			"The 'reason' captures WHY it was invalidated; the 'learned' field captures WHAT was learned " +
-			"(e.g., 'synchronous APIs don't scale for our volume'). This creates a learnings database — " +
-			"query invalidated decisions later to see what approaches failed and why. " +
-			"Use 'superseded_by' to link to the replacement decision if one exists. " +
-			"BEFORE CALLING: You MUST (1) use card_capsule_show to review the decision's full context, " +
-			"(2) explain to the user why this decision should be invalidated, " +
-			"(3) ask for explicit permission, (4) only then call with user_confirmed=true and a non-empty reason.",
-	}, s.handleInvalidate)
-
-	// card_session_summary - lightweight session summary
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_session_summary",
-		Description: "Get a lightweight summary of a session - just the description, status, and decision list. " +
-			"Use this for quick 'catch me up' queries. For full artifacts (file manifest, patterns, and " +
-			"execution logs if session is still active), use card_session_artifacts instead.",
-	}, s.handleSessionSummary)
-
-	// card_hotspots - find areas with most decisions
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_hotspots",
-		Description: "Find files and areas with the most CARD decisions. Use this to understand where " +
-			"context is rich vs sparse in the codebase. Returns file hotspots (most decisions) and " +
-			"concept hotspots (most discussed topics).",
-	}, s.handleHotspots)
-
-	// card_patterns - extract patterns from sessions
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_patterns",
-		Description: "Get all implementation patterns introduced across CARD sessions. Returns patterns " +
-			"with descriptions and the sessions where they were introduced. Use this for quick reference " +
-			"on 'how do we do X in this codebase'.",
-	}, s.handlePatterns)
-
-	// card_preflight - pre-work briefing
-	mcp.AddTool(s.server, &mcp.Tool{
-		Name: "card_preflight",
-		Description: "Get a pre-flight briefing before working on files. Combines file context, relevant " +
-			"decisions, and patterns into actionable guidance. PROACTIVE USE: Call this BEFORE any " +
-			"implementation work. Don't wait for users to ask - surface context before they make mistakes. " +
-			"Pass your intent (e.g., 'adding rate limiting') for better recommendations.",
-	}, s.handlePreflight)
-
 	// card_agent_guidance - get proactive usage instructions
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_agent_guidance",
@@ -186,17 +93,113 @@ func (s *Server) registerTools() {
 			"The tool handles path resolution — you provide the content, CARD handles where it goes. " +
 			"Content MUST include valid YAML frontmatter with session, phase, timestamp, and status fields.",
 	}, s.handleWriteArtifact)
+
+	// card_decision - unified decision recording with significance tiers
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_decision",
+		Description: "Record a decision with significance tier and optional human confirmation. " +
+			"SIGNIFICANCE TIERS:\n" +
+			"- 'architectural': Trade-off decisions, multiple viable alternatives, shapes future work. " +
+			"Use require_confirmation=true for human review.\n" +
+			"- 'implementation': Pattern-following, obvious choices, easily reversible. " +
+			"Use require_confirmation=false for immediate storage.\n" +
+			"- 'context': Facts discovered, constraints identified, not really decisions. " +
+			"Use require_confirmation=false.\n\n" +
+			"FLOW:\n" +
+			"- require_confirmation=false: Stores immediately, returns capsule_id\n" +
+			"- require_confirmation=true: Returns proposal_id with similar/contradicting decisions. " +
+			"Present to human, then call card_decision_confirm to finalize.\n\n" +
+			"This replaces manual '### Decision:' blocks in artifacts. " +
+			"Decisions captured here are immediately queryable via card_query.",
+	}, s.handleDecision)
+
+	// card_decision_confirm - confirm a proposed architectural decision
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_decision_confirm",
+		Description: "Confirm a proposed decision after human approval. " +
+			"Only needed when card_decision was called with require_confirmation=true. " +
+			"ACTIONS:\n" +
+			"- 'create': Store new capsule with explicit confirmation\n" +
+			"- 'supersede': Store new capsule and invalidate the specified prior decisions\n" +
+			"- 'skip': Discard proposal, nothing stored\n" +
+			"- 'merge_into:<id>': Update existing capsule with enriched rationale/tags\n\n" +
+			"When action='supersede', provide invalidate_ids with the IDs to invalidate, " +
+			"invalidation_reason, and optionally learned (insight gained).",
+	}, s.handleDecisionConfirm)
+
+	// card_context - unified pre-work context
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_context",
+		Description: "Get unified context before working on files.\n\n" +
+			"MODES:\n" +
+			"- 'starting_task': Recent decisions + patterns + hotspots for general task awareness\n" +
+			"- 'before_edit': File-specific decisions + applicable patterns before editing files\n" +
+			"- 'reviewing_pr': Commit-based decisions with coverage analysis for PR reviews\n\n" +
+			"PROACTIVE USE: Call this BEFORE any implementation work. Don't wait for users to ask.",
+	}, s.handleContext)
+
+	// card_query - unified search
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_query",
+		Description: "Unified search across CARD's memory.\n\n" +
+			"TARGETS:\n" +
+			"- 'decisions': Search decision capsules by files, tags, or text\n" +
+			"- 'sessions': List sessions for a repository\n" +
+			"- 'patterns': Get implementation patterns from sessions\n" +
+			"- 'learnings': Query invalidated decisions with learned insights\n" +
+			"- 'tags': List all tags from decision capsules\n" +
+			"- 'hotspots': Find files with most decisions\n\n" +
+			"SMART DEFAULT: Call with target='decisions' and no params for the 15 most recent decisions.",
+	}, s.handleQuery)
+
+	// card_session_ops - unified session operations
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_session_ops",
+		Description: "Unified session operations.\n\n" +
+			"OPERATIONS:\n" +
+			"- 'summary': Lightweight session overview (description, status, decision list)\n" +
+			"- 'artifacts': Full artifacts (milestone_ledger, execution_log, verification_notes)\n" +
+			"- 'history': All versioned execution logs across re-execution attempts\n" +
+			"- 'review': All decisions with duplicate analysis\n" +
+			"- 'dedupe': Merge semantic duplicates (use dedupe_dry_run for preview)",
+	}, s.handleSessionOps)
+
+	// card_capsule_ops - unified capsule operations
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_capsule_ops",
+		Description: "Unified capsule operations.\n\n" +
+			"OPERATIONS:\n" +
+			"- 'show': Full details of a decision capsule\n" +
+			"- 'chain': Navigate supersession relationships\n" +
+			"- 'invalidate': Mark a decision as invalidated (requires user_confirmed=true)\n" +
+			"- 'graph': Show dependency graph (enables/constrains relationships)\n\n" +
+			"For invalidate: You MUST (1) review with operation='show', (2) explain why, (3) get permission.",
+	}, s.handleCapsuleOps)
+
+	// card_snapshot - temporal queries for point-in-time decision state
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_snapshot",
+		Description: "Query CARD's decision state at a point in time. Use this for archaeological queries like " +
+			"'what decisions existed before this commit?' or 'what changed in the last 2 weeks?'\n\n" +
+			"AS_OF formats:\n" +
+			"- ISO8601: '2026-01-15T10:00:00Z'\n" +
+			"- Relative: '2 weeks ago', '3 days ago', 'yesterday'\n" +
+			"- Commit: 'before:<commit-sha>' (resolves to commit timestamp)\n\n" +
+			"Set compare_to_now=true to see what changed since that point.",
+	}, s.handleSnapshot)
 }
 
 // RecallArgs defines the input for card_recall.
 type RecallArgs struct {
-	Files            []string `json:"files,omitempty" jsonschema:"File paths to search for related decisions (e.g. src/auth.ts)"`
-	Tags             []string `json:"tags,omitempty" jsonschema:"Tags or keywords to search (e.g. authentication, database, api)"`
-	Query            string   `json:"query,omitempty" jsonschema:"Search capsule content: the question asked, choice made, and rationale given. Example: 'TypeORM' finds 'Why TypeORM over raw SQL?' Use tags param for concept search like 'authentication'."`
-	Repo             string   `json:"repo,omitempty" jsonschema:"Repository ID to scope the search (optional - searches all repos if not specified)"`
-	IncludeEvolution bool     `json:"include_evolution,omitempty" jsonschema:"If true, show all phases of each decision instead of just the latest (default: false)"`
-	Status           string   `json:"status,omitempty" jsonschema:"Filter by capsule status: 'verified', 'hypothesis', or 'invalidated' (optional - returns all if not specified)"`
-	Format           string   `json:"format,omitempty" jsonschema:"Output format: 'full' (default) or 'compact' (IDs and choices only)"`
+	Files              []string `json:"files,omitempty" jsonschema:"File paths to search for related decisions (e.g. src/auth.ts)"`
+	Tags               []string `json:"tags,omitempty" jsonschema:"Tags or keywords to search (e.g. authentication, database, api)"`
+	Query              string   `json:"query,omitempty" jsonschema:"Search capsule content: the question asked, choice made, and rationale given. Example: 'TypeORM' finds 'Why TypeORM over raw SQL?' Use tags param for concept search like 'authentication'."`
+	Repo               string   `json:"repo,omitempty" jsonschema:"Repository ID to scope the search (optional - searches all repos if not specified)"`
+	IncludeEvolution   bool     `json:"include_evolution,omitempty" jsonschema:"If true, show all phases of each decision instead of just the latest (default: false)"`
+	Status             string   `json:"status,omitempty" jsonschema:"Filter by capsule status: 'verified', 'hypothesis', or 'invalidated' (optional - returns all if not specified)"`
+	Format             string   `json:"format,omitempty" jsonschema:"Output format: 'full' (default) or 'compact' (IDs and choices only)"`
+	Significance       string   `json:"significance,omitempty" jsonschema:"Filter by significance tier: 'architectural', 'implementation', 'context', or 'all' (default: 'all')"`
+	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"If true, include invalidated decisions (default: false - excludes invalidated)"`
 }
 
 // RecallResult is the output of card_recall.
@@ -218,6 +221,7 @@ type CapsuleSummary struct {
 	MatchTier    string   `json:"match_tier,omitempty"`
 	Status       string   `json:"status"`                      // verified, hypothesis, invalidated
 	Type         string   `json:"type,omitempty"`              // decision or finding
+	Significance string   `json:"significance,omitempty"`      // architectural, implementation, context
 	SupersededBy string   `json:"superseded_by,omitempty"`     // If invalidated, what replaced it
 	Recency      string   `json:"recency,omitempty"`           // Human-readable time (e.g., "2 days ago")
 	PensieveLink string   `json:"pensieve_link,omitempty"`     // Path to milestone_ledger
@@ -265,11 +269,28 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		statusFilter = &status
 	}
 
+	// Filter by significance if specified
+	var significanceFilter *capsule.Significance
+	if args.Significance != "" && args.Significance != "all" {
+		sig := capsule.Significance(strings.ToLower(args.Significance))
+		significanceFilter = &sig
+	}
+
 	isCompact := args.Format == "compact"
 
 	for _, sc := range result.Capsules {
 		// Apply status filter
 		if statusFilter != nil && sc.Status != *statusFilter {
+			continue
+		}
+
+		// Exclude invalidated unless explicitly requested
+		if !args.IncludeInvalidated && sc.Status == capsule.StatusInvalidated {
+			continue
+		}
+
+		// Apply significance filter
+		if significanceFilter != nil && sc.Significance != *significanceFilter {
 			continue
 		}
 
@@ -281,6 +302,7 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 			Choice:       sc.Choice,
 			Status:       string(sc.Status),
 			Type:         string(sc.Type),
+			Significance: string(sc.Significance),
 			SupersededBy: sc.SupersededBy,
 			Recency:      formatRelativeTime(sc.Timestamp),
 			PensieveLink: fmt.Sprintf("~/.card/sessions/%s/milestone_ledger.md", sc.SessionID),
@@ -307,7 +329,11 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 
 	// Add hint about quickfix when results are found
 	if len(out.Capsules) > 0 {
-		out.Message = "Tip: If you discover something that needs fixing, use card_quickfix_start to create a recorded quickfix session."
+		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead. Tip: If you discover something that needs fixing, use card_quickfix_start to create a recorded quickfix session."
+	} else if out.Message == "" {
+		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead."
+	} else {
+		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead. " + out.Message
 	}
 
 	return nil, out, nil
@@ -819,7 +845,8 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 
 // FileContextArgs defines input for card_file_context.
 type FileContextArgs struct {
-	Files []string `json:"files" jsonschema:"File paths to get context for (e.g. ['src/auth/guard.ts'])"`
+	Files        []string `json:"files" jsonschema:"File paths to get context for (e.g. ['src/auth/guard.ts'])"`
+	Significance string   `json:"significance,omitempty" jsonschema:"'architectural' (default) or 'all'. Use 'all' for complete history."`
 }
 
 // FileDecisions represents decisions related to a specific file.
@@ -843,6 +870,9 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		return nil, nil, fmt.Errorf("at least one file path is required")
 	}
 
+	// Default to architectural only (reduces noise)
+	filterArchitecturalOnly := args.Significance != "all"
+
 	out := FileContextResult{
 		Files: make(map[string]FileDecisions),
 	}
@@ -859,6 +889,14 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		matchedIDs := make(map[string]bool)
 
 		for _, c := range allCapsules {
+			// Skip invalidated capsules
+			if c.Status == capsule.StatusInvalidated {
+				continue
+			}
+			// Filter by significance (default: architectural only)
+			if filterArchitecturalOnly && c.Significance != capsule.SignificanceArchitectural {
+				continue
+			}
 			if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
 				matchingCapsules = append(matchingCapsules, c)
 				sessionSet[c.SessionID] = true
@@ -917,14 +955,15 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		var capsuleSummaries []CapsuleSummary
 		for _, c := range matchingCapsules {
 			capsuleSummaries = append(capsuleSummaries, CapsuleSummary{
-				ID:        c.ID,
-				SessionID: c.SessionID,
-				Phase:     c.Phase,
-				Question:  c.Question,
-				Choice:    c.Choice,
-				Rationale: c.Rationale,
-				Tags:      c.Tags,
-				MatchTier: string(c.Status),
+				ID:           c.ID,
+				SessionID:    c.SessionID,
+				Phase:        c.Phase,
+				Question:     c.Question,
+				Choice:       c.Choice,
+				Rationale:    c.Rationale,
+				Tags:         c.Tags,
+				Status:       string(c.Status),
+				Significance: string(c.Significance),
 			})
 		}
 
@@ -954,6 +993,8 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 
 	if len(out.Files) == 0 {
 		out.Message = "No prior decisions found for these files."
+	} else if filterArchitecturalOnly {
+		out.Message = "Showing architectural decisions only. Use significance: 'all' for complete history."
 	}
 
 	return nil, out, nil
@@ -1501,8 +1542,9 @@ func extractPatternsFromLedger(content string) []Pattern {
 
 // PreflightArgs defines input for card_preflight.
 type PreflightArgs struct {
-	Files  []string `json:"files" jsonschema:"File paths to get pre-flight briefing for"`
-	Intent string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting', 'refactoring auth')"`
+	Files        []string `json:"files" jsonschema:"File paths to get pre-flight briefing for"`
+	Intent       string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting', 'refactoring auth')"`
+	Significance string   `json:"significance,omitempty" jsonschema:"'architectural' (default) or 'all'. Use 'all' for complete history."`
 }
 
 // PreflightResult is the output of card_preflight.
@@ -1519,6 +1561,9 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		return nil, nil, fmt.Errorf("at least one file path is required")
 	}
 
+	// Default to architectural only (reduces noise)
+	filterArchitecturalOnly := args.Significance != "all"
+
 	out := PreflightResult{
 		Files: make(map[string]FileDecisions),
 	}
@@ -1532,6 +1577,14 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		sessionSet := make(map[string]bool)
 
 		for _, c := range allCapsules {
+			// Skip invalidated capsules
+			if c.Status == capsule.StatusInvalidated {
+				continue
+			}
+			// Filter by significance (default: architectural only)
+			if filterArchitecturalOnly && c.Significance != capsule.SignificanceArchitectural {
+				continue
+			}
 			if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
 				matchingCapsules = append(matchingCapsules, c)
 				sessionSet[c.SessionID] = true
@@ -1937,4 +1990,1221 @@ func (s *Server) handleWriteArtifact(ctx context.Context, req *mcp.CallToolReque
 		Path:    destPath,
 		Message: fmt.Sprintf("Artifact written to %s", destPath),
 	}, nil
+}
+
+// DecisionArgs defines input for card_decision.
+type DecisionArgs struct {
+	Question            string   `json:"question" jsonschema:"What is being decided"`
+	Choice              string   `json:"choice" jsonschema:"What was chosen"`
+	Alternatives        []string `json:"alternatives,omitempty" jsonschema:"Options considered (for decisions)"`
+	Rationale           string   `json:"rationale" jsonschema:"Why this choice was made"`
+	Tags                []string `json:"tags,omitempty" jsonschema:"File paths, concepts, domains (e.g. 'src/auth.ts', 'authorization')"`
+	Origin              string   `json:"origin,omitempty" jsonschema:"'human' or 'agent' (default: agent)"`
+	Significance        string   `json:"significance" jsonschema:"'architectural', 'implementation', or 'context'"`
+	RequireConfirmation bool     `json:"require_confirmation" jsonschema:"If true, returns proposal for human review; if false, stores immediately"`
+	SessionID           string   `json:"session_id,omitempty" jsonschema:"Session ID (optional - finds active session if not provided)"`
+	EnabledBy           string   `json:"enabled_by,omitempty" jsonschema:"Capsule ID that enabled this decision (for dependency graph)"`
+	Type                string   `json:"type,omitempty" jsonschema:"'decision' (has alternatives) or 'finding' (observation). Default: inferred from alternatives"`
+}
+
+// DecisionResult is the output of card_decision.
+type DecisionResult struct {
+	// For immediate storage (require_confirmation=false)
+	CapsuleID     string `json:"capsule_id,omitempty"`
+	SimilarWarning string `json:"similar_warning,omitempty"`
+
+	// For proposal flow (require_confirmation=true)
+	ProposalID          string              `json:"proposal_id,omitempty"`
+	SimilarExisting     []SimilarDecision   `json:"similar_existing,omitempty"`
+	Contradicts         []ConflictingDecision `json:"contradicts,omitempty"`
+	SuggestedAction     string              `json:"suggested_action,omitempty"`
+	AwaitingConfirmation bool               `json:"awaiting_confirmation,omitempty"`
+
+	Message string `json:"message"`
+}
+
+func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, args DecisionArgs) (*mcp.CallToolResult, any, error) {
+	// Validate required fields
+	if args.Question == "" {
+		return nil, nil, fmt.Errorf("question is required")
+	}
+	if args.Choice == "" {
+		return nil, nil, fmt.Errorf("choice is required")
+	}
+	if args.Rationale == "" {
+		return nil, nil, fmt.Errorf("rationale is required")
+	}
+	if args.Significance == "" {
+		return nil, nil, fmt.Errorf("significance is required (architectural, implementation, or context)")
+	}
+
+	// Validate significance
+	sig := capsule.Significance(strings.ToLower(args.Significance))
+	if sig != capsule.SignificanceArchitectural && sig != capsule.SignificanceImplementation && sig != capsule.SignificanceContext {
+		return nil, nil, fmt.Errorf("invalid significance: %s (must be architectural, implementation, or context)", args.Significance)
+	}
+
+	// Find session
+	sessionID := args.SessionID
+	if sessionID == "" {
+		// Find most recent active session
+		activeSessions, err := session.GetActive(s.store)
+		if err != nil || len(activeSessions) == 0 {
+			return nil, nil, fmt.Errorf("no active session found; provide session_id or start a session first")
+		}
+		sessionID = activeSessions[0].ID // Use most recent active session
+	}
+
+	// Verify session exists
+	sess, err := session.Get(s.store, sessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Determine origin
+	origin := args.Origin
+	if origin == "" {
+		origin = "agent"
+	}
+
+	// Determine type
+	capsuleType := capsule.TypeDecision
+	if args.Type != "" {
+		capsuleType = capsule.CapsuleType(strings.ToLower(args.Type))
+	} else if len(args.Alternatives) == 0 {
+		capsuleType = capsule.TypeFinding
+	}
+
+	// Normalize tags
+	normalizedTags := capsule.NormalizeTags(args.Tags)
+
+	// Build the capsule
+	now := time.Now().UTC()
+	c := capsule.Capsule{
+		SessionID:    sessionID,
+		RepoIDs:      sess.Repos,
+		Phase:        string(sess.Status), // Use current session status as phase
+		Timestamp:    now,
+		CreatedAt:    now,
+		Question:     args.Question,
+		Choice:       args.Choice,
+		Alternatives: args.Alternatives,
+		Rationale:    args.Rationale,
+		Origin:       origin,
+		Source:       origin, // Keep Source for backwards compatibility
+		Tags:         normalizedTags,
+		Status:       capsule.StatusHypothesis,
+		Type:         capsuleType,
+		Significance: sig,
+		EnabledBy:    args.EnabledBy,
+	}
+	c.ID = capsule.GenerateID(sessionID, c.Phase, args.Question)
+
+	// Load existing capsules for similarity check
+	existingCapsules, _ := capsule.List(s.store, capsule.Filter{
+		SessionID:          &sessionID,
+		IncludeInvalidated: false,
+	})
+
+	if args.RequireConfirmation {
+		// Full path: check for similar and contradicting decisions
+		similarResult := capsule.FastSimilarityCheck(existingCapsules, c)
+
+		// Also check for contradictions across all active decisions
+		allActive, _ := capsule.List(s.store, capsule.Filter{
+			IncludeInvalidated: false,
+		})
+		contradictResult := capsule.FastContradictionCheck(allActive, c)
+
+		// Merge results
+		mergedResult := capsule.MergeSimilarityResults(similarResult, contradictResult)
+
+		// Create proposal
+		proposal := &Proposal{
+			SessionID:       sessionID,
+			Capsule:         c,
+			SuggestedAction: "create",
+		}
+
+		if mergedResult != nil {
+			// Convert similarity results to proposal format
+			for _, sim := range mergedResult.Similar {
+				proposal.SimilarExisting = append(proposal.SimilarExisting, SimilarDecision{
+					ID:               sim.CapsuleID,
+					Question:         sim.Question,
+					Choice:           sim.Choice,
+					Phase:            sim.Phase,
+					SimilarityReason: sim.SimilarityReason,
+				})
+			}
+			for _, con := range mergedResult.Contradicts {
+				proposal.Contradicts = append(proposal.Contradicts, ConflictingDecision{
+					ID:        con.CapsuleID,
+					Question:  con.Question,
+					Choice:    con.Choice,
+					SessionID: con.SessionID,
+					Reason:    con.Reason,
+				})
+			}
+			proposal.SuggestedAction = mergedResult.SuggestedAction
+		}
+
+		// Store proposal
+		proposalID := s.proposals.Create(proposal)
+
+		return nil, DecisionResult{
+			ProposalID:           proposalID,
+			SimilarExisting:      proposal.SimilarExisting,
+			Contradicts:          proposal.Contradicts,
+			SuggestedAction:      proposal.SuggestedAction,
+			AwaitingConfirmation: true,
+			Message:              "Decision proposal created. Present similar/contradicting decisions to user and call card_decision_confirm with their choice.",
+		}, nil
+	}
+
+	// Fast path: store immediately
+	c.Confirmation = capsule.ConfirmationImplicit
+
+	// Quick similarity check (non-blocking warning)
+	var similarWarning string
+	if similarResult := capsule.FastSimilarityCheck(existingCapsules, c); similarResult != nil && len(similarResult.Similar) > 0 {
+		similarWarning = fmt.Sprintf("Note: Similar decision already exists: %s", similarResult.Similar[0].CapsuleID)
+	}
+
+	// Store the capsule
+	if err := capsule.Store(s.store, c); err != nil {
+		return nil, nil, fmt.Errorf("failed to store decision: %w", err)
+	}
+
+	return nil, DecisionResult{
+		CapsuleID:      c.ID,
+		SimilarWarning: similarWarning,
+		Message:        fmt.Sprintf("Decision stored: %s", c.ID),
+	}, nil
+}
+
+// DecisionConfirmArgs defines input for card_decision_confirm.
+type DecisionConfirmArgs struct {
+	ProposalID         string   `json:"proposal_id" jsonschema:"The proposal ID from card_decision"`
+	Action             string   `json:"action" jsonschema:"'create', 'supersede', 'skip', or 'merge_into:<capsule_id>'"`
+	InvalidateIDs      []string `json:"invalidate_ids,omitempty" jsonschema:"Capsule IDs to invalidate (for supersede action)"`
+	InvalidationReason string   `json:"invalidation_reason,omitempty" jsonschema:"Why the old decisions are being invalidated"`
+	Learned            string   `json:"learned,omitempty" jsonschema:"What was learned from the invalidation (insight gained)"`
+}
+
+// DecisionConfirmResult is the output of card_decision_confirm.
+type DecisionConfirmResult struct {
+	CapsuleID   string   `json:"capsule_id,omitempty"`
+	Invalidated []string `json:"invalidated,omitempty"`
+	Message     string   `json:"message"`
+}
+
+func (s *Server) handleDecisionConfirm(ctx context.Context, req *mcp.CallToolRequest, args DecisionConfirmArgs) (*mcp.CallToolResult, any, error) {
+	if args.ProposalID == "" {
+		return nil, nil, fmt.Errorf("proposal_id is required")
+	}
+	if args.Action == "" {
+		return nil, nil, fmt.Errorf("action is required (create, supersede, skip, or merge_into:<id>)")
+	}
+
+	// Get the proposal
+	proposal, err := s.proposals.Get(args.ProposalID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("proposal not found or expired: %w", err)
+	}
+
+	// Handle actions
+	switch {
+	case args.Action == "skip":
+		// Discard proposal
+		s.proposals.Delete(args.ProposalID)
+		return nil, DecisionConfirmResult{
+			Message: "Decision proposal discarded. No capsule stored.",
+		}, nil
+
+	case args.Action == "create":
+		// Store with explicit confirmation
+		c := proposal.Capsule
+		c.Confirmation = capsule.ConfirmationExplicit
+
+		if err := capsule.Store(s.store, c); err != nil {
+			return nil, nil, fmt.Errorf("failed to store decision: %w", err)
+		}
+
+		s.proposals.Delete(args.ProposalID)
+		return nil, DecisionConfirmResult{
+			CapsuleID: c.ID,
+			Message:   fmt.Sprintf("Decision stored with explicit confirmation: %s", c.ID),
+		}, nil
+
+	case args.Action == "supersede":
+		// Store new capsule and invalidate old ones
+		c := proposal.Capsule
+		c.Confirmation = capsule.ConfirmationExplicit
+
+		// Link to superseded decisions
+		c.Supersedes = args.InvalidateIDs
+
+		if err := capsule.Store(s.store, c); err != nil {
+			return nil, nil, fmt.Errorf("failed to store decision: %w", err)
+		}
+
+		// Invalidate the old decisions
+		var invalidated []string
+		for _, oldID := range args.InvalidateIDs {
+			if err := capsule.Invalidate(s.store, oldID, args.InvalidationReason, args.Learned, c.ID); err == nil {
+				invalidated = append(invalidated, oldID)
+			}
+		}
+
+		s.proposals.Delete(args.ProposalID)
+		return nil, DecisionConfirmResult{
+			CapsuleID:   c.ID,
+			Invalidated: invalidated,
+			Message:     fmt.Sprintf("Decision stored: %s. Superseded %d prior decisions.", c.ID, len(invalidated)),
+		}, nil
+
+	case strings.HasPrefix(args.Action, "merge_into:"):
+		// Merge into existing capsule
+		targetID := strings.TrimPrefix(args.Action, "merge_into:")
+		target, err := capsule.Get(s.store, targetID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("target capsule not found: %s", targetID)
+		}
+
+		// Enrich the target capsule
+		if proposal.Capsule.Rationale != "" && !strings.Contains(target.Rationale, proposal.Capsule.Rationale) {
+			target.Rationale = target.Rationale + "\n\nAdditional context: " + proposal.Capsule.Rationale
+		}
+		// Merge tags
+		tagSet := make(map[string]bool)
+		for _, t := range target.Tags {
+			tagSet[t] = true
+		}
+		for _, t := range proposal.Capsule.Tags {
+			if !tagSet[t] {
+				target.Tags = append(target.Tags, t)
+			}
+		}
+		// Use higher significance
+		if proposal.Capsule.Significance == capsule.SignificanceArchitectural {
+			target.Significance = capsule.SignificanceArchitectural
+		}
+
+		if err := capsule.Store(s.store, *target); err != nil {
+			return nil, nil, fmt.Errorf("failed to update capsule: %w", err)
+		}
+
+		s.proposals.Delete(args.ProposalID)
+		return nil, DecisionConfirmResult{
+			CapsuleID: target.ID,
+			Message:   fmt.Sprintf("Merged into existing capsule: %s", target.ID),
+		}, nil
+
+	default:
+		return nil, nil, fmt.Errorf("invalid action: %s", args.Action)
+	}
+}
+
+// ========== CONSOLIDATED TOOL HANDLERS (Phase 3) ==========
+
+// ContextArgs defines input for card_context.
+type ContextArgs struct {
+	Mode         string   `json:"mode" jsonschema:"'starting_task', 'before_edit', or 'reviewing_pr'"`
+	Files        []string `json:"files,omitempty" jsonschema:"File paths (required for before_edit mode)"`
+	Intent       string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting')"`
+	Significance string   `json:"significance,omitempty" jsonschema:"'architectural' (default) or 'all'"`
+	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum results to return (default 15)"`
+}
+
+// ContextResult is the output of card_context.
+type ContextResult struct {
+	Mode              string                   `json:"mode"`
+	Files             map[string]FileDecisions `json:"files,omitempty"`
+	RecentDecisions   []CapsuleSummary         `json:"recent_decisions,omitempty"`
+	RelevantDecisions []CapsuleSummary         `json:"relevant_decisions,omitempty"`
+	Patterns          []Pattern                `json:"patterns,omitempty"`
+	Hotspots          []FileHotspot            `json:"hotspots,omitempty"`
+	Recommendations   string                   `json:"recommendations,omitempty"`
+	Message           string                   `json:"message,omitempty"`
+}
+
+func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, args ContextArgs) (*mcp.CallToolResult, any, error) {
+	if args.Mode == "" {
+		args.Mode = "starting_task"
+	}
+
+	limit := args.Limit
+	if limit <= 0 {
+		limit = 15
+	}
+
+	filterArchitecturalOnly := args.Significance != "all"
+
+	out := ContextResult{
+		Mode:  args.Mode,
+		Files: make(map[string]FileDecisions),
+	}
+
+	switch args.Mode {
+	case "starting_task":
+		// Recent decisions + patterns + hotspots
+		allCapsules, _ := capsule.List(s.store, capsule.Filter{IncludeInvalidated: false})
+
+		// Get recent decisions
+		sort.Slice(allCapsules, func(i, j int) bool {
+			return allCapsules[i].Timestamp.After(allCapsules[j].Timestamp)
+		})
+
+		for i, c := range allCapsules {
+			if i >= limit {
+				break
+			}
+			if filterArchitecturalOnly && c.Significance != capsule.SignificanceArchitectural {
+				continue
+			}
+			out.RecentDecisions = append(out.RecentDecisions, CapsuleSummary{
+				ID:           c.ID,
+				SessionID:    c.SessionID,
+				Phase:        c.Phase,
+				Question:     c.Question,
+				Choice:       c.Choice,
+				Rationale:    c.Rationale,
+				Tags:         c.Tags,
+				Status:       string(c.Status),
+				Significance: string(c.Significance),
+				Recency:      formatRelativeTime(c.Timestamp),
+			})
+		}
+
+		// Get patterns
+		_, patternsResult, _ := s.handlePatterns(ctx, req, PatternsArgs{Limit: 5})
+		if pr, ok := patternsResult.(PatternsResult); ok {
+			out.Patterns = pr.Patterns
+		}
+
+		// Get hotspots
+		_, hotspotsResult, _ := s.handleHotspots(ctx, req, HotspotsArgs{Limit: 5})
+		if hr, ok := hotspotsResult.(HotspotsResult); ok {
+			out.Hotspots = hr.FileHotspots
+		}
+
+		out.Message = fmt.Sprintf("Starting task context: %d recent decisions, %d patterns, %d file hotspots",
+			len(out.RecentDecisions), len(out.Patterns), len(out.Hotspots))
+
+	case "before_edit":
+		if len(args.Files) == 0 {
+			return nil, nil, fmt.Errorf("files are required for before_edit mode")
+		}
+
+		// Delegate to existing file context logic
+		fileCtxArgs := FileContextArgs{Files: args.Files, Significance: args.Significance}
+		_, fileCtxRes, err := s.handleFileContext(ctx, req, fileCtxArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if fcr, ok := fileCtxRes.(FileContextResult); ok {
+			out.Files = fcr.Files
+		}
+
+		// Add intent-based relevant decisions
+		if args.Intent != "" {
+			allCapsules, _ := capsule.List(s.store, capsule.Filter{IncludeInvalidated: false})
+			intentCapsules := searchByIntent(allCapsules, args.Intent)
+			for _, c := range intentCapsules {
+				out.RelevantDecisions = append(out.RelevantDecisions, CapsuleSummary{
+					ID:           c.ID,
+					SessionID:    c.SessionID,
+					Phase:        c.Phase,
+					Question:     c.Question,
+					Choice:       c.Choice,
+					Rationale:    c.Rationale,
+					Tags:         c.Tags,
+					Status:       string(c.Status),
+					Significance: string(c.Significance),
+				})
+			}
+		}
+
+		out.Recommendations = generateRecommendations(out.Files, out.RelevantDecisions)
+
+	case "reviewing_pr":
+		// For PR review, show decisions related to the files
+		if len(args.Files) == 0 {
+			return nil, nil, fmt.Errorf("files are required for reviewing_pr mode")
+		}
+
+		fileCtxArgs := FileContextArgs{Files: args.Files, Significance: args.Significance}
+		_, fileCtxRes, err := s.handleFileContext(ctx, req, fileCtxArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if fcr, ok := fileCtxRes.(FileContextResult); ok {
+			out.Files = fcr.Files
+		}
+
+		// Count coverage
+		filesWithDecisions := 0
+		totalDecisions := 0
+		for _, fd := range out.Files {
+			if fd.CapsuleCount > 0 {
+				filesWithDecisions++
+				totalDecisions += fd.CapsuleCount
+			}
+		}
+
+		out.Message = fmt.Sprintf("PR coverage: %d/%d files have prior decisions (%d total decisions)",
+			filesWithDecisions, len(args.Files), totalDecisions)
+
+	default:
+		return nil, nil, fmt.Errorf("invalid mode: %s (must be starting_task, before_edit, or reviewing_pr)", args.Mode)
+	}
+
+	return nil, out, nil
+}
+
+// QueryArgs defines input for card_query.
+type QueryArgs struct {
+	Target             string   `json:"target" jsonschema:"'decisions', 'sessions', 'patterns', 'learnings', 'tags', or 'hotspots'"`
+	Query              string   `json:"query,omitempty" jsonschema:"Search query text"`
+	Tags               []string `json:"tags,omitempty" jsonschema:"Tags to filter by"`
+	Files              []string `json:"files,omitempty" jsonschema:"File paths to filter by"`
+	Repo               string   `json:"repo,omitempty" jsonschema:"Repository ID to scope the search"`
+	Significance       string   `json:"significance,omitempty" jsonschema:"'architectural', 'implementation', 'context', or 'all'"`
+	Status             string   `json:"status,omitempty" jsonschema:"Filter by status: 'verified', 'hypothesis', 'invalidated'"`
+	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"Include invalidated decisions (default: false)"`
+	IncludeEvolution   bool     `json:"include_evolution,omitempty" jsonschema:"Show all phases of each decision"`
+	Limit              int      `json:"limit,omitempty" jsonschema:"Maximum results to return"`
+}
+
+// QueryResult is the output of card_query.
+type QueryResult struct {
+	Target   string           `json:"target"`
+	Capsules []CapsuleSummary `json:"capsules,omitempty"`
+	Sessions []SessionDetail  `json:"sessions,omitempty"`
+	Patterns []Pattern        `json:"patterns,omitempty"`
+	Tags     []string         `json:"tags,omitempty"`
+	Hotspots *HotspotsResult  `json:"hotspots,omitempty"`
+	Message  string           `json:"message,omitempty"`
+}
+
+func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest, args QueryArgs) (*mcp.CallToolResult, any, error) {
+	if args.Target == "" {
+		args.Target = "decisions"
+	}
+
+	out := QueryResult{Target: args.Target}
+
+	switch args.Target {
+	case "decisions":
+		// Delegate to existing recall logic
+		recallArgs := RecallArgs{
+			Files:              args.Files,
+			Tags:               args.Tags,
+			Query:              args.Query,
+			Repo:               args.Repo,
+			IncludeEvolution:   args.IncludeEvolution,
+			Status:             args.Status,
+			Significance:       args.Significance,
+			IncludeInvalidated: args.IncludeInvalidated,
+		}
+		_, recallRes, err := s.handleRecall(ctx, req, recallArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if rr, ok := recallRes.(RecallResult); ok {
+			out.Capsules = rr.Capsules
+			out.Message = rr.Message
+		}
+
+	case "sessions":
+		sessArgs := SessionsArgs{
+			Repo:   args.Repo,
+			Status: args.Status,
+			Limit:  args.Limit,
+		}
+		_, sessRes, err := s.handleSessions(ctx, req, sessArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if sr, ok := sessRes.(SessionsResult); ok {
+			out.Sessions = sr.Sessions
+			out.Message = sr.Message
+		}
+
+	case "patterns":
+		patArgs := PatternsArgs{
+			Repo:  args.Repo,
+			Limit: args.Limit,
+		}
+		_, patRes, err := s.handlePatterns(ctx, req, patArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pr, ok := patRes.(PatternsResult); ok {
+			out.Patterns = pr.Patterns
+			out.Message = pr.Message
+		}
+
+	case "learnings":
+		// Query invalidated decisions with learned insights
+		allCapsules, err := capsule.List(s.store, capsule.Filter{IncludeInvalidated: true})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		for _, c := range allCapsules {
+			if c.Status != capsule.StatusInvalidated {
+				continue
+			}
+			// Only include if there's a learned insight
+			if c.Learned == "" && c.InvalidationReason == "" {
+				continue
+			}
+
+			out.Capsules = append(out.Capsules, CapsuleSummary{
+				ID:           c.ID,
+				SessionID:    c.SessionID,
+				Phase:        c.Phase,
+				Question:     c.Question,
+				Choice:       c.Choice,
+				Rationale:    fmt.Sprintf("INVALIDATED: %s\nLEARNED: %s", c.InvalidationReason, c.Learned),
+				Tags:         c.Tags,
+				Status:       string(c.Status),
+				Significance: string(c.Significance),
+				SupersededBy: c.SupersededBy,
+				Recency:      formatRelativeTime(c.Timestamp),
+			})
+		}
+
+		if len(out.Capsules) == 0 {
+			out.Message = "No learnings found. Learnings are captured when decisions are invalidated with the 'learned' field."
+		} else {
+			out.Message = fmt.Sprintf("Found %d invalidated decisions with learnings.", len(out.Capsules))
+		}
+
+	case "tags":
+		_, tagRes, err := s.handleTagsList(ctx, req, TagsListArgs{})
+		if err != nil {
+			return nil, nil, err
+		}
+		if tr, ok := tagRes.(TagsListResult); ok {
+			out.Tags = tr.Tags
+			out.Message = tr.Message
+		}
+
+	case "hotspots":
+		hotArgs := HotspotsArgs{
+			Repo:  args.Repo,
+			Limit: args.Limit,
+		}
+		_, hotRes, err := s.handleHotspots(ctx, req, hotArgs)
+		if err != nil {
+			return nil, nil, err
+		}
+		if hr, ok := hotRes.(HotspotsResult); ok {
+			out.Hotspots = &hr
+			out.Message = hr.Message
+		}
+
+	default:
+		return nil, nil, fmt.Errorf("invalid target: %s (must be decisions, sessions, patterns, learnings, tags, or hotspots)", args.Target)
+	}
+
+	return nil, out, nil
+}
+
+// SessionOpsArgs defines input for card_session_ops.
+type SessionOpsArgs struct {
+	SessionID    string `json:"session_id" jsonschema:"The session ID to operate on"`
+	Operation    string `json:"operation" jsonschema:"'summary', 'artifacts', 'history', 'review', or 'dedupe'"`
+	DedupeDryRun bool   `json:"dedupe_dry_run,omitempty" jsonschema:"For dedupe: preview only without merging"`
+}
+
+// SessionOpsResult is the output of card_session_ops.
+type SessionOpsResult struct {
+	SessionID string `json:"session_id"`
+	Operation string `json:"operation"`
+
+	// For summary
+	Description string           `json:"description,omitempty"`
+	Status      string           `json:"status,omitempty"`
+	Mode        string           `json:"mode,omitempty"`
+	Repos       []string         `json:"repos,omitempty"`
+	CreatedAt   string           `json:"created_at,omitempty"`
+	UpdatedAt   string           `json:"updated_at,omitempty"`
+	Decisions   []CapsuleSummary `json:"decisions,omitempty"`
+
+	// For artifacts
+	ExecutionAttempts int    `json:"execution_attempts,omitempty"`
+	MilestoneLedger   string `json:"milestone_ledger,omitempty"`
+	ExecutionLog      string `json:"execution_log,omitempty"`
+	VerificationNotes string `json:"verification_notes,omitempty"`
+
+	// For history
+	Attempts []ExecutionAttempt `json:"attempts,omitempty"`
+
+	// For review/dedupe
+	DuplicateGroups []DuplicateGroup `json:"duplicate_groups,omitempty"`
+
+	Message string `json:"message,omitempty"`
+}
+
+// DuplicateGroup represents a group of potentially duplicate decisions.
+type DuplicateGroup struct {
+	Capsules         []CapsuleSummary `json:"capsules"`
+	SimilarityReason string           `json:"similarity_reason"`
+	SuggestedMerge   string           `json:"suggested_merge,omitempty"`
+}
+
+func (s *Server) handleSessionOps(ctx context.Context, req *mcp.CallToolRequest, args SessionOpsArgs) (*mcp.CallToolResult, any, error) {
+	if args.SessionID == "" {
+		return nil, nil, fmt.Errorf("session_id is required")
+	}
+	if args.Operation == "" {
+		return nil, nil, fmt.Errorf("operation is required (summary, artifacts, history, review, or dedupe)")
+	}
+
+	sess, err := session.Get(s.store, args.SessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("session not found: %w", err)
+	}
+
+	out := SessionOpsResult{
+		SessionID: sess.ID,
+		Operation: args.Operation,
+	}
+
+	switch args.Operation {
+	case "summary":
+		_, summRes, err := s.handleSessionSummary(ctx, req, SessionSummaryArgs{SessionID: args.SessionID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if sr, ok := summRes.(SessionSummaryResult); ok {
+			out.Description = sr.Description
+			out.Status = sr.Status
+			out.Mode = sr.Mode
+			out.Repos = sr.Repos
+			out.CreatedAt = sr.CreatedAt
+			out.UpdatedAt = sr.UpdatedAt
+			out.Decisions = sr.Decisions
+			out.Message = sr.Message
+		}
+
+	case "artifacts":
+		_, artRes, err := s.handleSessionArtifacts(ctx, req, SessionArtifactsArgs{SessionID: args.SessionID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if ar, ok := artRes.(SessionArtifactsResult); ok {
+			out.ExecutionAttempts = ar.ExecutionAttempts
+			out.MilestoneLedger = ar.MilestoneLedger
+			out.ExecutionLog = ar.ExecutionLog
+			out.VerificationNotes = ar.VerificationNotes
+			out.Message = ar.Message
+		}
+
+	case "history":
+		_, histRes, err := s.handleSessionExecutionHistory(ctx, req, SessionExecutionHistoryArgs{SessionID: args.SessionID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if hr, ok := histRes.(SessionExecutionHistoryResult); ok {
+			out.ExecutionAttempts = hr.TotalAttempts
+			out.Attempts = hr.Attempts
+			out.Message = hr.Message
+		}
+
+	case "review", "dedupe":
+		// Get all capsules for this session
+		capsules, err := capsule.List(s.store, capsule.Filter{SessionID: &sess.ID})
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Find duplicates using similarity check
+		seen := make(map[string]bool)
+		for i, c1 := range capsules {
+			if seen[c1.ID] {
+				continue
+			}
+			var group []capsule.Capsule
+			group = append(group, c1)
+
+			for j := i + 1; j < len(capsules); j++ {
+				c2 := capsules[j]
+				if seen[c2.ID] {
+					continue
+				}
+
+				// Check similarity
+				if simResult := capsule.FastSimilarityCheck([]capsule.Capsule{c1}, c2); simResult != nil && len(simResult.Similar) > 0 {
+					group = append(group, c2)
+					seen[c2.ID] = true
+				}
+			}
+
+			if len(group) > 1 {
+				var capsuleSummaries []CapsuleSummary
+				for _, c := range group {
+					capsuleSummaries = append(capsuleSummaries, CapsuleSummary{
+						ID:           c.ID,
+						SessionID:    c.SessionID,
+						Phase:        c.Phase,
+						Question:     c.Question,
+						Choice:       c.Choice,
+						Rationale:    c.Rationale,
+						Tags:         c.Tags,
+						Status:       string(c.Status),
+						Significance: string(c.Significance),
+					})
+				}
+				out.DuplicateGroups = append(out.DuplicateGroups, DuplicateGroup{
+					Capsules:         capsuleSummaries,
+					SimilarityReason: "Similar question text",
+					SuggestedMerge:   fmt.Sprintf("Consider merging into %s", group[0].ID),
+				})
+				seen[c1.ID] = true
+			}
+		}
+
+		if args.Operation == "review" {
+			// For review, also include all decisions
+			for _, c := range capsules {
+				out.Decisions = append(out.Decisions, CapsuleSummary{
+					ID:           c.ID,
+					SessionID:    c.SessionID,
+					Phase:        c.Phase,
+					Question:     c.Question,
+					Choice:       c.Choice,
+					Rationale:    c.Rationale,
+					Tags:         c.Tags,
+					Status:       string(c.Status),
+					Significance: string(c.Significance),
+				})
+			}
+			out.Message = fmt.Sprintf("Session has %d decisions. Found %d potential duplicate groups.", len(capsules), len(out.DuplicateGroups))
+		} else {
+			// For dedupe
+			if args.DedupeDryRun {
+				out.Message = fmt.Sprintf("DRY RUN: Found %d duplicate groups. No changes made.", len(out.DuplicateGroups))
+			} else if len(out.DuplicateGroups) == 0 {
+				out.Message = "No duplicates found to merge."
+			} else {
+				out.Message = fmt.Sprintf("Found %d duplicate groups. Use card_decision_confirm with action='merge_into:<id>' to merge specific duplicates.", len(out.DuplicateGroups))
+			}
+		}
+
+	default:
+		return nil, nil, fmt.Errorf("invalid operation: %s (must be summary, artifacts, history, review, or dedupe)", args.Operation)
+	}
+
+	return nil, out, nil
+}
+
+// CapsuleOpsArgs defines input for card_capsule_ops.
+type CapsuleOpsArgs struct {
+	ID            string `json:"id" jsonschema:"The capsule ID to operate on"`
+	Operation     string `json:"operation" jsonschema:"'show', 'chain', 'invalidate', or 'graph'"`
+	Reason        string `json:"reason,omitempty" jsonschema:"For invalidate: why this decision is being invalidated"`
+	Learned       string `json:"learned,omitempty" jsonschema:"For invalidate: what was learned"`
+	SupersededBy  string `json:"superseded_by,omitempty" jsonschema:"For invalidate: ID of replacement decision"`
+	UserConfirmed bool   `json:"user_confirmed,omitempty" jsonschema:"For invalidate: REQUIRED - must be true after getting user permission"`
+	Depth         int    `json:"depth,omitempty" jsonschema:"For graph: how many levels to traverse (default 2)"`
+	Direction     string `json:"direction,omitempty" jsonschema:"For graph: 'up', 'down', or 'both' (default 'both')"`
+}
+
+// CapsuleOpsResult is the output of card_capsule_ops.
+type CapsuleOpsResult struct {
+	Operation string `json:"operation"`
+
+	// For show
+	Capsule *CapsuleDetail `json:"capsule,omitempty"`
+
+	// For chain
+	Current      *CapsuleSummary  `json:"current,omitempty"`
+	Supersedes   []CapsuleSummary `json:"supersedes,omitempty"`
+	SupersededBy *CapsuleSummary  `json:"superseded_by,omitempty"`
+	ChainSummary string           `json:"chain_summary,omitempty"`
+
+	// For invalidate
+	PreviousStatus string `json:"previous_status,omitempty"`
+	NewStatus      string `json:"new_status,omitempty"`
+
+	// For graph
+	Graph *DependencyGraph `json:"graph,omitempty"`
+
+	Message string `json:"message,omitempty"`
+}
+
+// DependencyGraph represents the decision dependency graph.
+type DependencyGraph struct {
+	Root     CapsuleSummary   `json:"root"`
+	Enables  []CapsuleSummary `json:"enables,omitempty"`
+	EnabledBy []CapsuleSummary `json:"enabled_by,omitempty"`
+	Constrains []CapsuleSummary `json:"constrains,omitempty"`
+	ASCII    string           `json:"ascii,omitempty"`
+}
+
+func (s *Server) handleCapsuleOps(ctx context.Context, req *mcp.CallToolRequest, args CapsuleOpsArgs) (*mcp.CallToolResult, any, error) {
+	if args.ID == "" {
+		return nil, nil, fmt.Errorf("capsule ID is required")
+	}
+	if args.Operation == "" {
+		return nil, nil, fmt.Errorf("operation is required (show, chain, invalidate, or graph)")
+	}
+
+	out := CapsuleOpsResult{Operation: args.Operation}
+
+	switch args.Operation {
+	case "show":
+		_, showRes, err := s.handleCapsuleShow(ctx, req, CapsuleShowArgs{ID: args.ID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if cd, ok := showRes.(CapsuleDetail); ok {
+			out.Capsule = &cd
+		}
+
+	case "chain":
+		_, chainRes, err := s.handleCapsuleChain(ctx, req, CapsuleChainArgs{ID: args.ID})
+		if err != nil {
+			return nil, nil, err
+		}
+		if cr, ok := chainRes.(CapsuleChainResult); ok {
+			out.Current = &cr.Capsule
+			out.Supersedes = cr.Supersedes
+			out.SupersededBy = cr.SupersededBy
+			out.ChainSummary = cr.ChainSummary
+		}
+
+	case "invalidate":
+		_, invRes, err := s.handleInvalidate(ctx, req, InvalidateArgs{
+			ID:            args.ID,
+			Reason:        args.Reason,
+			Learned:       args.Learned,
+			SupersededBy:  args.SupersededBy,
+			UserConfirmed: args.UserConfirmed,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		if ir, ok := invRes.(InvalidateResult); ok {
+			out.PreviousStatus = ir.PreviousStatus
+			out.NewStatus = ir.NewStatus
+			out.ChainSummary = ir.ChainSummary
+			out.Message = ir.Message
+		}
+
+	case "graph":
+		// Build multi-hop dependency graph using the capsule package
+		graphResult, err := capsule.BuildGraph(s.store, args.ID, args.Depth, args.Direction)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		// Convert to MCP result format
+		graph := &DependencyGraph{
+			Root: CapsuleSummary{
+				ID:           graphResult.Root.ID,
+				SessionID:    graphResult.Root.SessionID,
+				Question:     graphResult.Root.Question,
+				Choice:       graphResult.Root.Choice,
+				Significance: string(graphResult.Root.Significance),
+			},
+			ASCII: graphResult.ASCII,
+		}
+
+		// Categorize nodes by relationship type
+		for _, edge := range graphResult.Edges {
+			// Find the target node
+			var targetNode *capsule.GraphNode
+			for i := range graphResult.Nodes {
+				if graphResult.Nodes[i].ID == edge.To {
+					targetNode = &graphResult.Nodes[i]
+					break
+				}
+			}
+			if targetNode == nil {
+				continue
+			}
+
+			summary := CapsuleSummary{
+				ID:           targetNode.ID,
+				Question:     targetNode.Question,
+				Choice:       targetNode.Choice,
+				Significance: string(targetNode.Significance),
+			}
+
+			switch edge.Relationship {
+			case "enables":
+				if edge.From == args.ID {
+					graph.Enables = append(graph.Enables, summary)
+				} else {
+					graph.EnabledBy = append(graph.EnabledBy, summary)
+				}
+			case "constrains":
+				graph.Constrains = append(graph.Constrains, summary)
+			}
+		}
+
+		out.Graph = graph
+		out.Message = fmt.Sprintf("Dependency graph for %s (depth=%d, direction=%s): %d nodes, %d edges",
+			args.ID, graphResult.Depth, graphResult.Direction, len(graphResult.Nodes)+1, len(graphResult.Edges))
+
+	default:
+		return nil, nil, fmt.Errorf("invalid operation: %s (must be show, chain, invalidate, or graph)", args.Operation)
+	}
+
+	return nil, out, nil
+}
+
+// truncateString truncates a string to maxLen with ellipsis.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+// SnapshotArgs defines input for card_snapshot.
+type SnapshotArgs struct {
+	AsOf         string   `json:"as_of" jsonschema:"Point in time: ISO8601, relative ('2 weeks ago'), or 'before:<commit>'"`
+	Files        []string `json:"files,omitempty" jsonschema:"Filter to decisions affecting these files"`
+	Tags         []string `json:"tags,omitempty" jsonschema:"Filter to decisions with these tags"`
+	Significance string   `json:"significance,omitempty" jsonschema:"'architectural', 'implementation', 'context', or 'all'"`
+	CompareToNow bool     `json:"compare_to_now,omitempty" jsonschema:"If true, show diff between snapshot and current state"`
+}
+
+// SnapshotResult is the output of card_snapshot.
+type SnapshotResult struct {
+	AsOf            string           `json:"as_of"`
+	ResolvedTime    string           `json:"resolved_time"`
+	ActiveDecisions []CapsuleSummary `json:"active_decisions"`
+	Summary         SnapshotSummary  `json:"summary"`
+	Diff            *SnapshotDiff    `json:"diff,omitempty"`
+	Message         string           `json:"message,omitempty"`
+}
+
+// SnapshotSummary provides counts at the snapshot point.
+type SnapshotSummary struct {
+	TotalActive       int `json:"total_active"`
+	BySignificance    map[string]int `json:"by_significance"`
+	ByStatus          map[string]int `json:"by_status"`
+}
+
+// SnapshotDiff shows what changed between snapshot and now.
+type SnapshotDiff struct {
+	CreatedSince     []CapsuleSummary `json:"created_since,omitempty"`
+	InvalidatedSince []CapsuleSummary `json:"invalidated_since,omitempty"`
+	Summary          string           `json:"summary"`
+}
+
+func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, args SnapshotArgs) (*mcp.CallToolResult, any, error) {
+	if args.AsOf == "" {
+		return nil, nil, fmt.Errorf("as_of is required (ISO8601, relative like '2 weeks ago', or 'before:<commit>')")
+	}
+
+	// Parse the as_of time
+	snapshotTime, err := parseAsOf(args.AsOf)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse as_of: %w", err)
+	}
+
+	// Get all capsules (including invalidated for historical view)
+	allCapsules, err := capsule.List(s.store, capsule.Filter{IncludeInvalidated: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list capsules: %w", err)
+	}
+
+	// Filter by significance if specified
+	var significanceFilter *capsule.Significance
+	if args.Significance != "" && args.Significance != "all" {
+		sig := capsule.Significance(strings.ToLower(args.Significance))
+		significanceFilter = &sig
+	}
+
+	out := SnapshotResult{
+		AsOf:         args.AsOf,
+		ResolvedTime: snapshotTime.Format(time.RFC3339),
+		Summary: SnapshotSummary{
+			BySignificance: make(map[string]int),
+			ByStatus:       make(map[string]int),
+		},
+	}
+
+	// Determine which capsules were active at the snapshot time
+	// Active at time T: created_at <= T AND (invalidated_at IS NULL OR invalidated_at > T)
+	for _, c := range allCapsules {
+		// Check if capsule existed at snapshot time
+		createdAt := c.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = c.Timestamp // Fallback to timestamp for legacy capsules
+		}
+		if createdAt.After(snapshotTime) {
+			continue // Created after snapshot
+		}
+
+		// Check if capsule was still active at snapshot time
+		if c.InvalidatedAt != nil && !c.InvalidatedAt.After(snapshotTime) {
+			continue // Was invalidated before snapshot
+		}
+
+		// Apply file filter
+		if len(args.Files) > 0 {
+			matched := false
+			for _, file := range args.Files {
+				if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		// Apply tag filter
+		if len(args.Tags) > 0 {
+			matched := false
+			for _, tag := range args.Tags {
+				if capsule.MatchesTagQuery(c.Tags, tag) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
+		// Apply significance filter
+		if significanceFilter != nil && c.Significance != *significanceFilter {
+			continue
+		}
+
+		// Capsule was active at snapshot time
+		out.ActiveDecisions = append(out.ActiveDecisions, CapsuleSummary{
+			ID:           c.ID,
+			SessionID:    c.SessionID,
+			Phase:        c.Phase,
+			Question:     c.Question,
+			Choice:       c.Choice,
+			Rationale:    c.Rationale,
+			Tags:         c.Tags,
+			Status:       string(c.Status),
+			Significance: string(c.Significance),
+			Recency:      formatRelativeTime(createdAt),
+		})
+
+		// Update summary counts
+		out.Summary.TotalActive++
+		out.Summary.BySignificance[string(c.Significance)]++
+		// For status at snapshot time, we need to determine what status it had then
+		statusAtSnapshot := "hypothesis"
+		if c.Status == capsule.StatusVerified && (c.InvalidatedAt == nil || c.InvalidatedAt.After(snapshotTime)) {
+			statusAtSnapshot = "verified"
+		}
+		out.Summary.ByStatus[statusAtSnapshot]++
+	}
+
+	// Compare to now if requested
+	if args.CompareToNow {
+		diff := &SnapshotDiff{}
+		now := time.Now()
+
+		// Find capsules created since snapshot
+		for _, c := range allCapsules {
+			createdAt := c.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = c.Timestamp
+			}
+
+			// Created after snapshot
+			if createdAt.After(snapshotTime) && c.Status != capsule.StatusInvalidated {
+				diff.CreatedSince = append(diff.CreatedSince, CapsuleSummary{
+					ID:           c.ID,
+					SessionID:    c.SessionID,
+					Question:     c.Question,
+					Choice:       c.Choice,
+					Status:       string(c.Status),
+					Significance: string(c.Significance),
+					Recency:      formatRelativeTime(createdAt),
+				})
+			}
+
+			// Invalidated after snapshot
+			if c.InvalidatedAt != nil && c.InvalidatedAt.After(snapshotTime) && c.InvalidatedAt.Before(now) {
+				diff.InvalidatedSince = append(diff.InvalidatedSince, CapsuleSummary{
+					ID:           c.ID,
+					SessionID:    c.SessionID,
+					Question:     c.Question,
+					Choice:       c.Choice,
+					Status:       string(c.Status),
+					Significance: string(c.Significance),
+					Rationale:    fmt.Sprintf("Invalidated: %s", c.InvalidationReason),
+				})
+			}
+		}
+
+		diff.Summary = fmt.Sprintf("Since %s: %d decisions created, %d invalidated",
+			snapshotTime.Format("2006-01-02"), len(diff.CreatedSince), len(diff.InvalidatedSince))
+		out.Diff = diff
+	}
+
+	out.Message = fmt.Sprintf("Snapshot at %s: %d active decisions", snapshotTime.Format("2006-01-02 15:04"), out.Summary.TotalActive)
+
+	return nil, out, nil
+}
+
+// parseAsOf parses various time formats for snapshot queries.
+func parseAsOf(asOf string) (time.Time, error) {
+	// Check for "before:<commit>" format
+	if strings.HasPrefix(asOf, "before:") {
+		// This would require git access - for now return an error suggesting ISO format
+		return time.Time{}, fmt.Errorf("commit-based timestamps not yet implemented; use ISO8601 or relative format")
+	}
+
+	// Try ISO8601 first
+	if t, err := time.Parse(time.RFC3339, asOf); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05Z", asOf); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", asOf); err == nil {
+		return t, nil
+	}
+
+	// Parse relative formats
+	asOfLower := strings.ToLower(strings.TrimSpace(asOf))
+
+	if asOfLower == "yesterday" {
+		return time.Now().AddDate(0, 0, -1), nil
+	}
+
+	// Parse "N <unit> ago" format
+	var n int
+	var unit string
+	if _, err := fmt.Sscanf(asOfLower, "%d %s ago", &n, &unit); err == nil {
+		unit = strings.TrimSuffix(unit, "s") // normalize: "weeks" -> "week"
+		now := time.Now()
+		switch unit {
+		case "minute":
+			return now.Add(-time.Duration(n) * time.Minute), nil
+		case "hour":
+			return now.Add(-time.Duration(n) * time.Hour), nil
+		case "day":
+			return now.AddDate(0, 0, -n), nil
+		case "week":
+			return now.AddDate(0, 0, -n*7), nil
+		case "month":
+			return now.AddDate(0, -n, 0), nil
+		case "year":
+			return now.AddDate(-n, 0, 0), nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("unrecognized time format: %s (use ISO8601 like '2026-01-15' or relative like '2 weeks ago')", asOf)
 }

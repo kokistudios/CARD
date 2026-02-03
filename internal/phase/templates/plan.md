@@ -79,17 +79,18 @@ status: final
 - Be complete: over-document, include rationale inline
 - Be testable: validation checkpoints, expected outputs, debugging guidance
 
-### Decision Capsules
+### Decision Capture
 
-Include a `## Decisions` section for every significant planning decision using this exact format:
+When you make planning decisions, **record them immediately using the `card_decision` MCP tool**.
 
-```markdown
-### Decision: <what was being decided>
-- **Choice:** <what was chosen>
-- **Alternatives:** <option A>, <option B>, ...
-- **Rationale:** <why this choice>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
-```
+**For ARCHITECTURAL decisions** (trade-offs, multiple alternatives, shapes future work):
+- Use `card_decision` with `significance: "architectural"`, `require_confirmation: false`
+  (Planning phase is non-interactive, so no confirmation needed)
 
-Only capture decisions that were actually made during planning. Mark `Source: agent` for your planning recommendations.
+**For IMPLEMENTATION decisions** (pattern-following, obvious choices):
+- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+
+In the artifact, reference decisions by ID instead of writing `### Decision:` blocks:
+"As per [`<capsule_id>`], we'll structure the migration in three steps..."
+
+Set `origin: "agent"` for all planning decisions since this phase is non-interactive.

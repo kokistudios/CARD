@@ -106,20 +106,25 @@ This work required {{.ExecutionAttempts}} iterations to complete.
 - Be honest (limitations without defensiveness)
 - Be complete (every file, every pattern, every decision)
 
-### Decision Capsules
+### Decisions Section
 
-Include a `## Decisions` section summarizing all key decisions from the session using this format:
+**Do NOT redocument decisions that were already captured during earlier phases.** Decisions should have been recorded using `card_decision` throughout the session.
+
+Instead, include a summary that references the capsule IDs:
 
 ```markdown
-### Decision: <what was being decided>
-- **Choice:** <what was chosen>
-- **Alternatives:** <option A>, <option B>, ...
-- **Rationale:** <why this choice>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
+## Decisions
+
+This session produced N decisions (M architectural, P implementation).
+
+Key architectural decisions:
+- [`<capsule_id>`] Brief description of what was decided
+- [`<capsule_id>`] Brief description of what was decided
+
+Full decision history: ~/.card/sessions/{{.SessionID}}/capsules.md
 ```
 
-Only capture decisions that were actually made during the session. Mark `Source: human` only for decisions the developer explicitly made. Mark `Source: agent` for agent recommendations.
+Use `card_recall` with `session_id: "{{.SessionID}}"` to get the full list of decisions for this session.
 
 After writing the artifact, tell the developer: **"Milestone ledger written. To continue the CARD flow, press Ctrl+C twice."**
 

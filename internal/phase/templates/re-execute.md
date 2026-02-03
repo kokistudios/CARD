@@ -139,20 +139,21 @@ Include these sections (in this order of prominence):
 
 The execution log is critical — it's the handoff artifact that preserves implementation context and enables honest verification.
 
-### Decision Capsules
+### Decision Capture
 
-If you made implementation decisions during this re-execution, include a `## Decisions` section:
+When you make decisions during re-execution (remediation choices, new deviations), **record them immediately using the `card_decision` MCP tool** instead of writing decision blocks to the artifact.
 
-```markdown
-### Decision: <what was being decided>
-- **Choice:** <what was chosen>
-- **Alternatives:** <option A>, <option B>, ...
-- **Rationale:** <why this choice>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
-```
+**For remediation decisions** (how to fix an identified issue):
+- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
 
-Only capture decisions that were actually made during this re-execution (new deviations, remediation choices). Mark `Source: human` only for decisions the developer explicitly made. Mark `Source: agent` for your own implementation decisions.
+**For approach changes** (significant deviations from the original fix strategy):
+- Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+- Wait for developer confirmation before proceeding
+
+In your execution log, reference decisions by capsule ID instead of redocumenting them:
+"As per [`<capsule_id>`], we fixed the validation by..."
+
+Set `origin: "human"` only for decisions the developer explicitly made during re-execution dialogue. Set `origin: "agent"` for your own remediation choices.
 
 After writing the artifact, tell the developer: **"Execution log written. To continue the CARD flow, press Ctrl+C twice."**
 

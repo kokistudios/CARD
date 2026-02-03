@@ -81,18 +81,19 @@ The amended plan should:
 
 If no changes were needed, produce the plan as-is with a Review Summary noting "Plan approved without amendments."
 
-### Decision Capsules
+### Decision Capture
 
-Include a `## Decisions` section for any decisions made or changed during review:
+When decisions are made or changed during review, **record them using the `card_decision` MCP tool**.
 
-```markdown
-### Decision: <what was being decided>
-- **Choice:** <what was chosen>
-- **Alternatives:** <option A>, <option B>, ...
-- **Rationale:** <why this choice>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
-```
+**For ARCHITECTURAL decisions** (changes to approach, new trade-offs):
+- Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+- This is interactive — wait for human confirmation
+
+**For review amendments** (minor clarifications):
+- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+
+In the artifact, reference decisions by ID:
+"[Amended during review per [`<capsule_id>`]: changed from X to Y]"
 
 After writing the artifact, tell the developer: **"Reviewed plan written. To continue the CARD flow, press Ctrl+C twice."**
 

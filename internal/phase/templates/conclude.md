@@ -116,20 +116,33 @@ Any questions that remain unanswered and might require further research.
 
 If this research should spawn follow-up work, list potential future sessions with brief descriptions.
 
-## Decision Capsule Format
+## Decision Capture
 
-For every significant finding or decision made during research, include entries in this exact format:
+When you identify significant findings or reach conclusions during research, **record them immediately using the `card_decision` MCP tool** instead of writing decision blocks to the artifact.
 
-```markdown
-### Decision: <what was being decided or investigated>
-- **Type:** finding
-- **Choice:** <the conclusion reached>
-- **Alternatives:** <other interpretations considered>
-- **Rationale:** <why this conclusion>
-- **Tags:** <file paths, concepts, domains>
-- **Source:** <human or agent>
+Research sessions primarily produce **findings** rather than decisions. For each finding:
+
+```
+card_decision({
+  "type": "finding",
+  "question": "What is the state of X?",
+  "choice": "The conclusion reached",
+  "alternatives": ["Other interpretations considered"],
+  "rationale": "Why this conclusion, what evidence supports it",
+  "tags": ["file:path/to/relevant.go", "concept:name"],
+  "significance": "context",
+  "require_confirmation": false,
+  "origin": "agent"
+})
 ```
 
-Research sessions primarily produce `Type: finding` capsules rather than decisions, since no code changes are being made.
+**Significance for research:**
+- **context**: Most findings — facts discovered, observations (use `require_confirmation: false`)
+- **architectural**: Findings that will significantly shape future work (use `require_confirmation: true`)
+
+In the artifact, reference findings by capsule ID:
+"As discovered in [`<capsule_id>`], the authentication system..."
+
+Set `origin: "human"` only for conclusions the developer explicitly validated during dialogue.
 
 Wait for the user to say "Go" to begin.
