@@ -7,10 +7,24 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
+
+	"github.com/kokistudios/card/internal/signal"
 )
 
 // ErrInterrupted is returned when Claude is terminated by an interrupt signal (Ctrl+C).
 var ErrInterrupted = errors.New("claude interrupted")
+
+// ErrPhaseComplete is returned when Claude exits due to a phase complete signal.
+var ErrPhaseComplete = errors.New("phase complete signal received")
+
+const (
+	// signalPollInterval is how often we check for phase complete signals.
+	signalPollInterval = 500 * time.Millisecond
+
+	// signalGracePeriod is how long we wait for Claude to exit cleanly after SIGTERM.
+	signalGracePeriod = 2 * time.Second
+)
 
 // InvokeMode controls how Claude Code is launched.
 type InvokeMode int
@@ -77,6 +91,10 @@ func Invoke(opts InvokeOptions) error {
 // invokeInteractive opens Claude in interactive mode.
 // The system prompt and initial message are both set as system prompt context,
 // so the developer has full dialogue capability from the start.
+//
+// When OutputDir is set, this function polls for a phase complete signal file.
+// If Claude calls card_phase_complete with status "complete", this function
+// sends SIGTERM to gracefully terminate Claude and returns ErrPhaseComplete.
 func invokeInteractive(claudePath string, env []string, opts InvokeOptions) error {
 	args := []string{}
 
@@ -112,16 +130,69 @@ func invokeInteractive(claudePath string, env []string, opts InvokeOptions) erro
 	if opts.OnStart != nil {
 		opts.OnStart()
 	}
-	if err := cmd.Wait(); err != nil {
-		if isInterrupt(err) {
-			return ErrInterrupted
+
+	// Create channel for process completion
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- cmd.Wait()
+	}()
+
+	// Only poll for signals if OutputDir is set (i.e., we're in a CARD session phase)
+	if opts.OutputDir != "" {
+		ticker := time.NewTicker(signalPollInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case err := <-doneCh:
+				// Process finished naturally (Ctrl+C, completion, or crash)
+				return handleProcessExit(err)
+
+			case <-ticker.C:
+				// Check for phase complete signal
+				sig, sigErr := signal.CheckPhaseComplete(opts.OutputDir)
+				if sigErr != nil {
+					// Signal file read error - continue polling
+					continue
+				}
+				if sig != nil && sig.Status == "complete" {
+					// Signal received - gracefully terminate Claude
+					_ = cmd.Process.Signal(syscall.SIGTERM)
+
+					// Wait for clean exit with timeout
+					select {
+					case <-doneCh:
+						// Exited cleanly after SIGTERM
+					case <-time.After(signalGracePeriod):
+						// Force kill if still running
+						_ = cmd.Process.Kill()
+						<-doneCh
+					}
+
+					return ErrPhaseComplete
+				}
+				// sig.Status is "blocked" or "needs_input" - continue running
+			}
 		}
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return fmt.Errorf("claude exited with code %d", exitErr.ExitCode())
-		}
-		return fmt.Errorf("failed to run claude: %w", err)
 	}
-	return nil
+
+	// No OutputDir - wait for natural completion (legacy behavior)
+	err := <-doneCh
+	return handleProcessExit(err)
+}
+
+// handleProcessExit converts exec errors to appropriate return values.
+func handleProcessExit(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isInterrupt(err) {
+		return ErrInterrupted
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return fmt.Errorf("claude exited with code %d", exitErr.ExitCode())
+	}
+	return fmt.Errorf("failed to run claude: %w", err)
 }
 
 // invokeNonInteractive runs Claude via -p (print mode) to completion.

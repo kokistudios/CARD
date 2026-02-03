@@ -95,6 +95,17 @@ When decisions are made or changed during review, **record them using the `card_
 In the artifact, reference decisions by ID:
 "[Amended during review per [`<capsule_id>`]: changed from X to Y]"
 
-After writing the artifact, tell the developer: **"Reviewed plan written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "review",
+  "status": "complete",
+  "summary": "Review complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 Wait for the user to say "Go" to begin.

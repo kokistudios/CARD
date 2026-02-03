@@ -107,7 +107,18 @@ Include these sections:
 
 **If the outcome is "Re-execute Requested"**, the verification notes become critical input for the next execution attempt.
 
-After writing the artifact, tell the developer: **"Verification notes written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "verify",
+  "status": "complete",
+  "summary": "Verification complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 CARD will then prompt them to Accept, Re-execute, or Pause.
 

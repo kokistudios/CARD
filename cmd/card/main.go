@@ -104,6 +104,9 @@ func main() {
 	importC := importCmd()
 	importC.GroupID = "memory"
 	rootCmd.AddCommand(importC)
+	preflightC := preflightCmd()
+	preflightC.GroupID = "memory"
+	rootCmd.AddCommand(preflightC)
 
 	// MCP and Ask commands
 	askC := askCmd()
@@ -1325,6 +1328,179 @@ func recallCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repoID, "repo", "", "Repo ID to search")
 	cmd.Flags().StringArrayVar(&tags, "tag", nil, "Tags to search for")
 	cmd.Flags().StringVar(&format, "format", "brief", "Output format: brief or full")
+	return cmd
+}
+
+func preflightCmd() *cobra.Command {
+	var files []string
+	var intent string
+	var format string
+
+	cmd := &cobra.Command{
+		Use:   "preflight",
+		Short: "Get pre-flight briefing for files before editing",
+		Long: `Get a pre-flight briefing before working on files.
+
+Combines file context, relevant decisions, and patterns into actionable guidance.
+Useful with Claude Code hooks to surface context before file modifications.`,
+		Example: `  card preflight --files src/auth/guard.ts
+  card preflight --files src/auth/guard.ts --intent "adding rate limiting"
+  card preflight --files src/auth.ts src/middleware.ts --format json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(files) == 0 {
+				return fmt.Errorf("at least one --files flag is required")
+			}
+
+			s, err := loadStore()
+			if err != nil {
+				return err
+			}
+
+			// Auto-detect repo from CWD
+			repoID, _ := detectRepoFromCWD(s)
+
+			// Query capsules for each file
+			allCapsules, err := capsule.List(s, capsule.Filter{})
+			if err != nil {
+				return err
+			}
+
+			type fileInfo struct {
+				File          string   `json:"file"`
+				CapsuleCount  int      `json:"capsule_count"`
+				StatusSummary string   `json:"status_summary"`
+				Decisions     []string `json:"decisions,omitempty"`
+			}
+
+			var fileInfos []fileInfo
+			var matchedCapsules []capsule.Capsule
+
+			for _, file := range files {
+				var matching []capsule.Capsule
+				verified, hypothesis := 0, 0
+
+				for _, c := range allCapsules {
+					if c.Status == capsule.StatusInvalidated {
+						continue
+					}
+					if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
+						matching = append(matching, c)
+						matchedCapsules = append(matchedCapsules, c)
+						if c.Status == capsule.StatusVerified {
+							verified++
+						} else {
+							hypothesis++
+						}
+					}
+				}
+
+				statusParts := []string{}
+				if verified > 0 {
+					statusParts = append(statusParts, fmt.Sprintf("%d verified", verified))
+				}
+				if hypothesis > 0 {
+					statusParts = append(statusParts, fmt.Sprintf("%d hypothesis", hypothesis))
+				}
+
+				var decisions []string
+				for _, c := range matching {
+					decisions = append(decisions, fmt.Sprintf("[%s] %s → %s", c.ID[:12], c.Question, c.Choice))
+				}
+
+				fi := fileInfo{
+					File:          file,
+					CapsuleCount:  len(matching),
+					StatusSummary: strings.Join(statusParts, ", "),
+				}
+				if format == "json" {
+					fi.Decisions = decisions
+				}
+				fileInfos = append(fileInfos, fi)
+			}
+
+			// Search by intent if provided
+			var intentMatches []capsule.Capsule
+			if intent != "" {
+				intentLower := strings.ToLower(intent)
+				for _, c := range allCapsules {
+					if c.Status == capsule.StatusInvalidated {
+						continue
+					}
+					// Simple text search in question, choice, rationale, tags
+					searchText := strings.ToLower(c.Question + " " + c.Choice + " " + c.Rationale + " " + strings.Join(c.Tags, " "))
+					if strings.Contains(searchText, intentLower) {
+						// Avoid duplicates
+						isDupe := false
+						for _, mc := range matchedCapsules {
+							if mc.ID == c.ID {
+								isDupe = true
+								break
+							}
+						}
+						if !isDupe {
+							intentMatches = append(intentMatches, c)
+						}
+					}
+				}
+			}
+
+			if format == "json" {
+				type jsonOutput struct {
+					Files         []fileInfo `json:"files"`
+					IntentMatches int        `json:"intent_matches,omitempty"`
+					RepoID        string     `json:"repo_id,omitempty"`
+				}
+				out := jsonOutput{
+					Files:         fileInfos,
+					IntentMatches: len(intentMatches),
+					RepoID:        repoID,
+				}
+				data, _ := json.MarshalIndent(out, "", "  ")
+				fmt.Println(string(data))
+				return nil
+			}
+
+			// Text output
+			ui.SectionHeader("Pre-flight Briefing")
+			fmt.Println()
+
+			for _, fi := range fileInfos {
+				if fi.CapsuleCount == 0 {
+					ui.Detail(fi.File, "No prior decisions")
+				} else {
+					ui.Detail(fi.File, fmt.Sprintf("%d decisions (%s)", fi.CapsuleCount, fi.StatusSummary))
+				}
+			}
+
+			if len(matchedCapsules) > 0 {
+				fmt.Println()
+				ui.Info("Relevant decisions:")
+				for _, c := range matchedCapsules {
+					fmt.Printf("  [%s] %s\n", c.ID[:12], c.Question)
+					fmt.Printf("    → %s\n", c.Choice)
+				}
+			}
+
+			if len(intentMatches) > 0 {
+				fmt.Println()
+				ui.Info(fmt.Sprintf("Intent matches (%d):", len(intentMatches)))
+				for _, c := range intentMatches {
+					fmt.Printf("  [%s] %s\n", c.ID[:12], c.Question)
+				}
+			}
+
+			if len(matchedCapsules) == 0 && len(intentMatches) == 0 {
+				fmt.Println()
+				ui.Info("No prior decisions found. This appears to be new territory.")
+			}
+
+			return nil
+		},
+	}
+	cmd.Flags().StringArrayVar(&files, "files", nil, "File paths to get context for")
+	cmd.Flags().StringVar(&intent, "intent", "", "What you're planning to do (e.g., 'adding rate limiting')")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text or json")
+	_ = cmd.MarkFlagRequired("files")
 	return cmd
 }
 

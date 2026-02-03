@@ -155,7 +155,18 @@ In your execution log, reference decisions by capsule ID instead of redocumentin
 
 Set `origin: "human"` only for decisions the developer explicitly made during re-execution dialogue. Set `origin: "agent"` for your own remediation choices.
 
-After writing the artifact, tell the developer: **"Execution log written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "execute",
+  "status": "complete",
+  "summary": "Re-execution complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 ## Multi-Repo Signal
 

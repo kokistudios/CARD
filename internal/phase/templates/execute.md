@@ -191,7 +191,18 @@ In the artifact, reference decisions by ID:
 
 Set `origin: "human"` only for decisions the developer explicitly made. Set `origin: "agent"` for your own implementation decisions.
 
-After writing the artifact, tell the developer: **"Execution log written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "execute",
+  "status": "complete",
+  "summary": "Execution complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 ## Multi-Repo Signal
 

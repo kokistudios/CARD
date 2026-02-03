@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"gopkg.in/yaml.v3"
 
 	"github.com/kokistudios/card/internal/artifact"
 	"github.com/kokistudios/card/internal/capsule"
@@ -187,6 +188,18 @@ func (s *Server) registerTools() {
 			"- Commit: 'before:<commit-sha>' (resolves to commit timestamp)\n\n" +
 			"Set compare_to_now=true to see what changed since that point.",
 	}, s.handleSnapshot)
+
+	// card_phase_complete - signal that a session phase is complete
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name: "card_phase_complete",
+		Description: "Signal that the current phase is complete. Call AFTER writing the artifact via " +
+			"card_write_artifact. This allows CARD to gracefully advance to the next phase.\n\n" +
+			"STATUS VALUES:\n" +
+			"- 'complete': Phase finished successfully; advance to next phase\n" +
+			"- 'blocked': Phase cannot proceed; session will pause with your summary as the reason\n" +
+			"- 'needs_input': Waiting for human input before completing (use sparingly)\n\n" +
+			"After calling this, CARD will terminate the Claude process and transition to the next phase.",
+	}, s.handlePhaseComplete)
 }
 
 // RecallArgs defines the input for card_recall.
@@ -1990,6 +2003,115 @@ func (s *Server) handleWriteArtifact(ctx context.Context, req *mcp.CallToolReque
 		Path:    destPath,
 		Message: fmt.Sprintf("Artifact written to %s", destPath),
 	}, nil
+}
+
+// PhaseCompleteArgs defines input for card_phase_complete.
+type PhaseCompleteArgs struct {
+	SessionID string `json:"session_id" jsonschema:"The session ID that is completing a phase"`
+	Phase     string `json:"phase" jsonschema:"The phase completing: investigate, review, execute, verify, simplify, record, or conclude"`
+	Status    string `json:"status" jsonschema:"'complete', 'blocked', or 'needs_input'"`
+	Summary   string `json:"summary,omitempty" jsonschema:"Brief summary of outcome or blocking reason"`
+}
+
+// PhaseCompleteResult is the output of card_phase_complete.
+type PhaseCompleteResult struct {
+	Message string `json:"message"`
+}
+
+func (s *Server) handlePhaseComplete(ctx context.Context, req *mcp.CallToolRequest, args PhaseCompleteArgs) (*mcp.CallToolResult, any, error) {
+	if args.SessionID == "" {
+		return nil, nil, fmt.Errorf("session_id is required")
+	}
+	if args.Phase == "" {
+		return nil, nil, fmt.Errorf("phase is required")
+	}
+	if args.Status == "" {
+		return nil, nil, fmt.Errorf("status is required")
+	}
+
+	// Validate status
+	validStatus := map[string]bool{"complete": true, "blocked": true, "needs_input": true}
+	if !validStatus[args.Status] {
+		return nil, nil, fmt.Errorf("invalid status: %s (must be complete, blocked, or needs_input)", args.Status)
+	}
+
+	// Validate phase
+	validPhases := map[string]bool{
+		"investigate": true,
+		"review":      true,
+		"execute":     true,
+		"verify":      true,
+		"simplify":    true,
+		"record":      true,
+		"conclude":    true,
+	}
+	if !validPhases[args.Phase] {
+		return nil, nil, fmt.Errorf("invalid phase: %s", args.Phase)
+	}
+
+	// Validate session exists
+	_, err := session.Get(s.store, args.SessionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("session not found: %s", args.SessionID)
+	}
+
+	// Get output dir from environment (set by orchestrator when invoking Claude)
+	outputDir := os.Getenv("CARD_OUTPUT_DIR")
+	if outputDir == "" {
+		return nil, nil, fmt.Errorf("CARD_OUTPUT_DIR not set - this tool can only be called during a CARD session phase")
+	}
+
+	// Import the signal package and write signal file
+	sig := &phaseCompleteSignal{
+		SessionID: args.SessionID,
+		Phase:     args.Phase,
+		Status:    args.Status,
+		Timestamp: time.Now().UTC(),
+		Summary:   args.Summary,
+	}
+
+	if err := writePhaseCompleteSignal(outputDir, sig); err != nil {
+		return nil, nil, fmt.Errorf("failed to write phase complete signal: %w", err)
+	}
+
+	msg := fmt.Sprintf("Phase %s marked as %s.", args.Phase, args.Status)
+	if args.Status == "complete" {
+		msg += " CARD will advance to the next phase."
+	} else if args.Status == "blocked" {
+		msg += " Session will pause."
+	}
+
+	return nil, PhaseCompleteResult{
+		Message: msg,
+	}, nil
+}
+
+// phaseCompleteSignal mirrors signal.PhaseCompleteSignal to avoid import cycle.
+type phaseCompleteSignal struct {
+	SessionID string    `yaml:"session_id"`
+	Phase     string    `yaml:"phase"`
+	Status    string    `yaml:"status"`
+	Timestamp time.Time `yaml:"timestamp"`
+	Summary   string    `yaml:"summary,omitempty"`
+}
+
+func writePhaseCompleteSignal(workDir string, sig *phaseCompleteSignal) error {
+	signalsDir := filepath.Join(workDir, "signals")
+	if err := os.MkdirAll(signalsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create signals directory: %w", err)
+	}
+
+	data, err := yaml.Marshal(sig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal signal: %w", err)
+	}
+
+	path := filepath.Join(signalsDir, "phase_complete.yaml")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write signal file: %w", err)
+	}
+
+	return nil
 }
 
 // DecisionArgs defines input for card_decision.

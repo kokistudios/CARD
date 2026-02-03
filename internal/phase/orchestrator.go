@@ -239,6 +239,9 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 		return fmt.Errorf("failed to create work directory: %w", err)
 	}
 
+	// Clear any stale phase complete signal from previous runs
+	_ = reposignal.ClearPhaseComplete(workDir)
+
 	// Determine invocation mode
 	mode := claude.ModeInteractive
 	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord {
@@ -270,16 +273,42 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	})
 	spin.Stop() // Always stop spinner after invoke completes
 	if err != nil {
-		if errors.Is(err, claude.ErrInterrupted) {
+		if errors.Is(err, claude.ErrPhaseComplete) {
+			// Signal-based phase completion - check signal for details
+			sig, sigErr := reposignal.CheckPhaseComplete(workDir)
+			if sigErr == nil && sig != nil {
+				switch sig.Status {
+				case "complete":
+					// Normal completion via signal - continue
+					ui.PhaseComplete(phaseName)
+				case "blocked":
+					// Phase blocked - pause session with reason
+					ui.Warning(fmt.Sprintf("Phase blocked: %s", sig.Summary))
+					_ = session.Pause(s, sess.ID)
+					ui.Info(fmt.Sprintf("Session %s paused due to blocking issue. Resume with 'card session resume'.", sess.ID))
+					return nil
+				case "needs_input":
+					// Shouldn't reach here since we only trigger on "complete"
+					ui.Warning("Phase needs input - this is unexpected")
+				}
+			} else {
+				// Signal file missing or invalid after ErrPhaseComplete - treat as complete
+				ui.PhaseComplete(phaseName)
+			}
+			// Clear signal file after processing
+			_ = reposignal.ClearPhaseComplete(workDir)
+		} else if errors.Is(err, claude.ErrInterrupted) {
+			// Ctrl+C fallback - pause session (existing behavior)
 			ui.Warning("Interrupted. Pausing session...")
 			_ = session.Pause(s, sess.ID)
 			ui.Info(fmt.Sprintf("Session %s paused at %s. Resume with 'card session resume'.", sess.ID, phaseName))
 			return nil
+		} else {
+			return fmt.Errorf("claude invocation failed for %s: %w", phaseName, err)
 		}
-		return fmt.Errorf("claude invocation failed for %s: %w", phaseName, err)
+	} else {
+		ui.PhaseComplete(phaseName)
 	}
-
-	ui.PhaseComplete(phaseName)
 
 	// Simplify and verify produce no artifact
 	if !ProducesArtifact(p) {

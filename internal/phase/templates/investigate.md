@@ -102,7 +102,18 @@ card_write_artifact({
 })
 ```
 
-Tell the developer: **"Investigation artifact written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "investigate",
+  "status": "complete",
+  "summary": "Investigation complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 The content MUST include this YAML frontmatter at the start:
 ```yaml

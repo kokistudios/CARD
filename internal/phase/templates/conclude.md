@@ -57,7 +57,18 @@ Engage the developer to validate conclusions and prioritize recommendations:
 After the dialogue is complete, produce the artifact file at:
 `{{.OutputDir}}/{{.ArtifactFilename}}`
 
-Tell the developer: **"Research conclusions written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "conclude",
+  "status": "complete",
+  "summary": "Research conclusions complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 The artifact MUST have this YAML frontmatter:
 ```yaml

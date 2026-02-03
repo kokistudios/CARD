@@ -126,6 +126,17 @@ Full decision history: ~/.card/sessions/{{.SessionID}}/capsules.md
 
 Use `card_recall` with `session_id: "{{.SessionID}}"` to get the full list of decisions for this session.
 
-After writing the artifact, tell the developer: **"Milestone ledger written. To continue the CARD flow, press Ctrl+C twice."**
+After writing the artifact, signal phase completion:
+
+```
+card_phase_complete({
+  "session_id": "{{.SessionID}}",
+  "phase": "record",
+  "status": "complete",
+  "summary": "Recording complete."
+})
+```
+
+If you encounter a blocking issue that prevents completion, use `status: "blocked"` with a summary explaining the problem.
 
 Wait for the user to say "Go" to begin.
