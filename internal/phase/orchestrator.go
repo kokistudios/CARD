@@ -14,9 +14,9 @@ import (
 	"github.com/kokistudios/card/internal/artifact"
 	"github.com/kokistudios/card/internal/capsule"
 	"github.com/kokistudios/card/internal/change"
-	"github.com/kokistudios/card/internal/claude"
 	"github.com/kokistudios/card/internal/recall"
 	"github.com/kokistudios/card/internal/repo"
+	"github.com/kokistudios/card/internal/runtime"
 	"github.com/kokistudios/card/internal/session"
 	reposignal "github.com/kokistudios/card/internal/signal"
 	"github.com/kokistudios/card/internal/store"
@@ -243,37 +243,41 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	_ = reposignal.ClearPhaseComplete(workDir)
 
 	// Determine invocation mode
-	mode := claude.ModeInteractive
+	mode := runtime.ModeInteractive
 	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord {
-		mode = claude.ModeNonInteractive
+		mode = runtime.ModeNonInteractive
 	}
 
-	ui.PhaseLaunch(phaseName, mode == claude.ModeInteractive)
+	ui.PhaseLaunch(phaseName, mode == runtime.ModeInteractive)
+
+	rt, err := runtime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
+	if err != nil {
+		return fmt.Errorf("failed to initialize runtime: %w", err)
+	}
 
 	// For interactive mode, spinner shows briefly during startup then stops when Claude UI takes over.
 	// For non-interactive mode, spinner runs throughout execution to show progress.
 	var spin *ui.Spinner
 	var onStart func()
-	if mode == claude.ModeInteractive {
-		spin = ui.NewSpinner("Starting Claude Code...")
+	if mode == runtime.ModeInteractive {
+		spin = ui.NewSpinner(fmt.Sprintf("Starting %s...", strings.ToUpper(rt.Name())))
 		onStart = func() { spin.Stop() }
 	} else {
 		spin = ui.NewSpinner(fmt.Sprintf("Running %s phase...", strings.ToUpper(phaseName)))
 	}
 
-	err = claude.Invoke(claude.InvokeOptions{
+	err = rt.Invoke(runtime.InvokeOptions{
 		SystemPrompt:   systemPrompt,
 		InitialMessage: initialMessage,
 		WorkingDir:     primaryRepo.LocalPath,
 		AllowedTools:   allowedTools,
 		OutputDir:      workDir,
-		ClaudePath:     s.Config.Claude.Path,
 		Mode:           mode,
 		OnStart:        onStart,
 	})
 	spin.Stop() // Always stop spinner after invoke completes
 	if err != nil {
-		if errors.Is(err, claude.ErrPhaseComplete) {
+		if errors.Is(err, runtime.ErrPhaseComplete) {
 			// Signal-based phase completion - check signal for details
 			sig, sigErr := reposignal.CheckPhaseComplete(workDir)
 			if sigErr == nil && sig != nil {
@@ -297,14 +301,14 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 			}
 			// Clear signal file after processing
 			_ = reposignal.ClearPhaseComplete(workDir)
-		} else if errors.Is(err, claude.ErrInterrupted) {
+		} else if errors.Is(err, runtime.ErrInterrupted) {
 			// Ctrl+C fallback - pause session (existing behavior)
 			ui.Warning("Interrupted. Pausing session...")
 			_ = session.Pause(s, sess.ID)
 			ui.Info(fmt.Sprintf("Session %s paused at %s. Resume with 'card session resume'.", sess.ID, phaseName))
 			return nil
 		} else {
-			return fmt.Errorf("claude invocation failed for %s: %w", phaseName, err)
+			return fmt.Errorf("%s invocation failed for %s: %w", rt.Name(), phaseName, err)
 		}
 	} else {
 		ui.PhaseComplete(phaseName)
@@ -349,7 +353,7 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	}
 
 	// Render for non-interactive phases
-	if mode == claude.ModeNonInteractive && a.Body != "" {
+	if mode == runtime.ModeNonInteractive && a.Body != "" {
 		fmt.Fprintln(os.Stderr)
 		ui.Info(fmt.Sprintf("── %s artifact ──", strings.ToUpper(phaseName)))
 		ui.RenderMarkdown(a.Body)

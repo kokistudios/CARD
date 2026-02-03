@@ -91,6 +91,9 @@ func TestHomeEnvVar(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
+	if cfg.Runtime.Type != "claude" {
+		t.Errorf("expected default runtime type 'claude', got %s", cfg.Runtime.Type)
+	}
 	if cfg.Claude.Path != "claude" {
 		t.Errorf("expected default claude path 'claude', got %s", cfg.Claude.Path)
 	}
@@ -121,6 +124,12 @@ func TestLoadMergesDefaults(t *testing.T) {
 		t.Fatalf("Load failed: %v", err)
 	}
 	// Default values should be filled in
+	if s.Config.Runtime.Type != "claude" {
+		t.Errorf("expected default runtime type, got %s", s.Config.Runtime.Type)
+	}
+	if s.Config.Runtime.Path != "claude" {
+		t.Errorf("expected runtime path to inherit claude path, got %s", s.Config.Runtime.Path)
+	}
 	if s.Config.Claude.Path != "claude" {
 		t.Errorf("expected default claude path, got %s", s.Config.Claude.Path)
 	}
@@ -141,11 +150,17 @@ func TestSetConfigValue(t *testing.T) {
 	if s.Config.Claude.Path != "/usr/local/bin/claude" {
 		t.Errorf("expected updated path, got %s", s.Config.Claude.Path)
 	}
+	if s.Config.Runtime.Path != "/usr/local/bin/claude" {
+		t.Errorf("expected runtime path to follow claude path, got %s", s.Config.Runtime.Path)
+	}
 
 	// Reload and verify persistence
 	s2, _ := Load(home)
 	if s2.Config.Claude.Path != "/usr/local/bin/claude" {
 		t.Errorf("config not persisted, got %s", s2.Config.Claude.Path)
+	}
+	if s2.Config.Runtime.Path != "/usr/local/bin/claude" {
+		t.Errorf("runtime config not persisted, got %s", s2.Config.Runtime.Path)
 	}
 }
 

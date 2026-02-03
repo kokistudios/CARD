@@ -14,6 +14,12 @@ type ClaudeConfig struct {
 	DefaultFlags []string `yaml:"default_flags,omitempty"`
 }
 
+// RuntimeConfig holds AI runtime settings.
+type RuntimeConfig struct {
+	Type string `yaml:"type"`
+	Path string `yaml:"path,omitempty"`
+}
+
 // SessionConfig holds session behavior settings.
 type SessionConfig struct {
 	AutoContinueSimplify bool `yaml:"auto_continue_simplify"`
@@ -30,6 +36,7 @@ type RecallConfig struct {
 // Config holds CARD configuration.
 type Config struct {
 	Version string        `yaml:"version"`
+	Runtime RuntimeConfig `yaml:"runtime,omitempty"`
 	Claude  ClaudeConfig  `yaml:"claude,omitempty"`
 	Session SessionConfig `yaml:"session,omitempty"`
 	Recall  RecallConfig  `yaml:"recall,omitempty"`
@@ -39,6 +46,9 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Version: "1",
+		Runtime: RuntimeConfig{
+			Type: "claude",
+		},
 		Claude: ClaudeConfig{
 			Path: "claude",
 		},
@@ -119,6 +129,12 @@ func Load(home string) (*Store, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("invalid config.yaml: %w", err)
 	}
+	if cfg.Runtime.Type == "" {
+		cfg.Runtime.Type = "claude"
+	}
+	if cfg.Runtime.Type == "claude" && cfg.Runtime.Path == "" && cfg.Claude.Path != "" {
+		cfg.Runtime.Path = cfg.Claude.Path
+	}
 	return &Store{Home: home, Config: cfg}, nil
 }
 
@@ -138,8 +154,15 @@ func (s *Store) SaveConfig() error {
 // SetConfigValue sets a config value by dot-path key (e.g. "claude.path").
 func (s *Store) SetConfigValue(key, value string) error {
 	switch key {
+	case "runtime.type":
+		s.Config.Runtime.Type = value
+	case "runtime.path":
+		s.Config.Runtime.Path = value
 	case "claude.path":
 		s.Config.Claude.Path = value
+		if s.Config.Runtime.Type == "" || s.Config.Runtime.Type == "claude" {
+			s.Config.Runtime.Path = value
+		}
 	case "session.auto_continue_simplify":
 		s.Config.Session.AutoContinueSimplify = value == "true"
 	case "session.auto_continue_record":
@@ -163,7 +186,7 @@ func (s *Store) SetConfigValue(key, value string) error {
 		}
 		s.Config.Recall.MaxContextTokens = n
 	default:
-		return fmt.Errorf("unknown config key: %s\nValid keys: claude.path, session.auto_continue_simplify, session.auto_continue_record, recall.max_context_blocks, recall.max_context_chars, recall.max_context_tokens", key)
+		return fmt.Errorf("unknown config key: %s\nValid keys: runtime.type, runtime.path, claude.path, session.auto_continue_simplify, session.auto_continue_record, recall.max_context_blocks, recall.max_context_chars, recall.max_context_tokens", key)
 	}
 	return s.SaveConfig()
 }

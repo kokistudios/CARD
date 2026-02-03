@@ -177,8 +177,8 @@ commits:
 - **Language**: Go
 - **Distribution**: Single binary (brew, scoop, direct download)
 - **Storage**: Markdown+frontmatter for artifacts, YAML for metadata/config
-- **AI Runtime**: Claude Code CLI (`claude`) — required dependency
-- **MCP**: Model Context Protocol server for Claude integration
+- **AI Runtime**: Claude Code CLI (`claude`) or Codex CLI (`codex`)
+- **MCP**: Model Context Protocol server for runtime integration
 - **No external services**: Everything runs locally
 
 ## Module Structure
@@ -194,7 +194,7 @@ internal/
   capsule/              Decision capsule extraction, storage, querying
   recall/               Context assembly (file, repo, tag, git correlation)
   mcp/                  MCP server implementation
-  claude/               Claude Code CLI wrapper
+  runtime/              Runtime interface + Claude/Codex implementations
   ui/                   Terminal output, colors, prompts
 ```
 
@@ -230,14 +230,14 @@ Both binaries share the same `~/.card` data directory. This lets you test change
 
 ### MCP Server Auto-Configuration
 
-CARD automatically configures Claude Code's MCP server on every invocation. The binary name determines the MCP server name:
+CARD automatically configures the selected runtime's MCP server on every invocation. The binary name determines the MCP server name:
 
 - Running `card-dev` → registers `card-dev` MCP server, removes `card` MCP server
 - Running `card` → registers `card` MCP server, removes `card-dev` MCP server
 
-This prevents confusion about which version's tools Claude is using. The configuration:
-- Reads `~/.claude.json` directly for speed (no subprocess)
-- Removes from both user and project scopes
+This prevents confusion about which version's tools the assistant is using. The configuration:
+- Delegates to the runtime implementation
+- Removes alternates for Claude (card vs card-dev)
 - Only prints a message when changes are made
 
 Use `card ask --setup-mcp` to force reconfiguration if needed.

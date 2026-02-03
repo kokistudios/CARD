@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -16,11 +17,11 @@ import (
 	"github.com/kokistudios/card/internal/bundle"
 	"github.com/kokistudios/card/internal/capsule"
 	"github.com/kokistudios/card/internal/change"
-	"github.com/kokistudios/card/internal/claude"
 	cardmcp "github.com/kokistudios/card/internal/mcp"
 	"github.com/kokistudios/card/internal/phase"
 	"github.com/kokistudios/card/internal/recall"
 	"github.com/kokistudios/card/internal/repo"
+	cardruntime "github.com/kokistudios/card/internal/runtime"
 	"github.com/kokistudios/card/internal/session"
 	"github.com/kokistudios/card/internal/store"
 	"github.com/kokistudios/card/internal/ui"
@@ -83,6 +84,8 @@ func main() {
 
 	configC := configCmd()
 	configC.GroupID = "config"
+	runtimeC := runtimeCmd()
+	runtimeC.GroupID = "config"
 
 	rootCmd.AddCommand(initC)
 	rootCmd.AddCommand(repoC)
@@ -91,6 +94,7 @@ func main() {
 	rootCmd.AddCommand(recallC)
 	rootCmd.AddCommand(doctorC)
 	rootCmd.AddCommand(configC)
+	rootCmd.AddCommand(runtimeC)
 	comcapC := comcapCmd()
 	comcapC.GroupID = "session"
 	rootCmd.AddCommand(comcapC)
@@ -158,7 +162,7 @@ func repoAddCmd() *cobra.Command {
 		Use:     "add <path>",
 		Short:   "Register a repository with CARD",
 		Example: "  card repo add /path/to/my/repo\n  card repo add .",
-		Args:  cobra.ExactArgs(1),
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := store.Load(store.Home())
 			if err != nil {
@@ -1526,6 +1530,55 @@ func detectRepoFromCWD(s *store.Store) (string, error) {
 	return "", fmt.Errorf("not inside a registered repo")
 }
 
+func locateRuntimeBinary(runtimeType string, allowAuto bool) string {
+	name := runtimeType
+	if runtimeType == "claude" {
+		name = "claude"
+	} else if runtimeType == "codex" {
+		name = "codex"
+	}
+
+	if path, err := exec.LookPath(name); err == nil {
+		return path
+	}
+
+	if !allowAuto {
+		return name
+	}
+
+	for _, candidate := range commonRuntimePaths(runtimeType) {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+
+	return name
+}
+
+func commonRuntimePaths(runtimeType string) []string {
+	bin := runtimeType
+	if runtimeType == "claude" {
+		bin = "claude"
+	} else if runtimeType == "codex" {
+		bin = "codex"
+	}
+
+	switch runtime.GOOS {
+	case "darwin":
+		return []string{
+			filepath.Join("/opt/homebrew/bin", bin),
+			filepath.Join("/usr/local/bin", bin),
+		}
+	case "linux":
+		return []string{
+			filepath.Join("/usr/local/bin", bin),
+			filepath.Join("/usr/bin", bin),
+		}
+	default:
+		return nil
+	}
+}
+
 func configCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
@@ -1533,6 +1586,69 @@ func configCmd() *cobra.Command {
 	}
 	cmd.AddCommand(configShowCmd())
 	cmd.AddCommand(configSetCmd())
+	return cmd
+}
+
+func runtimeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "runtime",
+		Short: "Manage CARD runtime selection",
+	}
+	cmd.AddCommand(runtimeUseCmd())
+	return cmd
+}
+
+func runtimeUseCmd() *cobra.Command {
+	var path string
+	var auto bool
+	cmd := &cobra.Command{
+		Use:   "use <claude|codex>",
+		Short: "Switch the active runtime",
+		Long: `Switch the active runtime and configure the default path.
+
+By default, this command tries to detect the runtime binary on PATH or in common install locations.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			runtimeType := strings.ToLower(args[0])
+			if runtimeType != "claude" && runtimeType != "codex" {
+				return fmt.Errorf("unsupported runtime: %s (use claude or codex)", runtimeType)
+			}
+
+			s, err := loadStore()
+			if err != nil {
+				return err
+			}
+
+			selectedPath := path
+			if selectedPath == "" {
+				selectedPath = locateRuntimeBinary(runtimeType, auto)
+			}
+
+			s.Config.Runtime.Type = runtimeType
+			if selectedPath != "" {
+				s.Config.Runtime.Path = selectedPath
+			}
+
+			if runtimeType == "claude" && selectedPath != "" {
+				s.Config.Claude.Path = selectedPath
+			}
+
+			if err := s.SaveConfig(); err != nil {
+				return err
+			}
+
+			ui.Success(fmt.Sprintf("Runtime set to %s", runtimeType))
+			if selectedPath != "" {
+				ui.Info(fmt.Sprintf("Runtime path: %s", selectedPath))
+			} else {
+				ui.Warning("Runtime path not found; using default lookup")
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&path, "path", "", "Explicit runtime binary path")
+	cmd.Flags().BoolVar(&auto, "auto", true, "Search common install locations")
 	return cmd
 }
 
@@ -1559,11 +1675,13 @@ func configSetCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set <key> <value>",
 		Short: "Set a configuration value",
-		Long:  "Set a CARD configuration value. Valid keys: claude.path, session.auto_continue_simplify, session.auto_continue_record, recall.max_context_blocks, recall.max_context_chars.",
-		Example: `  card config set claude.path /usr/local/bin/claude
+		Long:  "Set a CARD configuration value. Valid keys: runtime.type, runtime.path, claude.path, session.auto_continue_simplify, session.auto_continue_record, recall.max_context_blocks, recall.max_context_chars.",
+		Example: `  card config set runtime.type codex
+  card config set runtime.path /usr/local/bin/codex
+  card config set claude.path /usr/local/bin/claude
   card config set session.auto_continue_simplify false
   card config set recall.max_context_blocks 15`,
-		Args:  cobra.ExactArgs(2),
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := loadStore()
 			if err != nil {
@@ -1670,9 +1788,12 @@ func doctorCmd() *cobra.Command {
 				}
 			}
 
-			// Check Claude Code availability
-			if err := claude.AvailableAt(s.Config.Claude.Path); err != nil {
-				issues = append(issues, store.Issue{Severity: "warning", Message: fmt.Sprintf("Claude Code: %v", err)})
+			// Check runtime availability
+			rt, rtErr := cardruntime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
+			if rtErr != nil {
+				issues = append(issues, store.Issue{Severity: "warning", Message: fmt.Sprintf("Runtime: %v", rtErr)})
+			} else if err := rt.Available(); err != nil {
+				issues = append(issues, store.Issue{Severity: "warning", Message: fmt.Sprintf("%s: %v", strings.ToUpper(rt.Name()), err)})
 			}
 
 			if len(issues) == 0 {
@@ -1943,13 +2064,13 @@ func askCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ask",
 		Short: "Start an interactive conversation with CARD context",
-		Long: `Start Claude Code with access to CARD's engineering memory.
+		Long: `Start an AI runtime with access to CARD's engineering memory.
 
-Claude can query prior decisions, session history, and context as the conversation
-evolves. No need to specify files or tags upfront — just ask questions and Claude
+The assistant can query prior decisions, session history, and context as the conversation
+evolves. No need to specify files or tags upfront — just ask questions and the assistant
 will pull relevant context from CARD as needed.
 
-On first run, this command will configure Claude Code to use CARD's MCP server.`,
+On first run, this command will configure the runtime to use CARD's MCP server.`,
 		Example: `  card ask                    # Start from current directory
   card ask --repo /path/to/repo  # Start in a specific repo`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -2005,15 +2126,20 @@ On first run, this command will configure Claude Code to use CARD's MCP server.`
 			// Build system prompt with bootstrapped context
 			systemPrompt := buildAskSystemPrompt(repoID, workDir, bootstrap)
 
+			rt, err := cardruntime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
+			if err != nil {
+				return err
+			}
+
 			// Display CARD logo with wizard and wisdom (animated Pensieve intro)
 			ui.AnimatedWisdomBanner()
-			ui.Status("Starting Claude Code with CARD context...")
+			ui.Status(fmt.Sprintf("Starting %s with CARD context...", strings.ToUpper(rt.Name())))
 			fmt.Fprintln(os.Stderr)
 
-			return claude.Invoke(claude.InvokeOptions{
+			return rt.Invoke(cardruntime.InvokeOptions{
 				SystemPrompt: systemPrompt,
 				WorkingDir:   workDir,
-				Mode:         claude.ModeInteractive,
+				Mode:         cardruntime.ModeInteractive,
 			})
 		},
 	}
@@ -2024,10 +2150,18 @@ On first run, this command will configure Claude Code to use CARD's MCP server.`
 	return cmd
 }
 
-// ensureMCPConfigured checks and configures Claude Code's MCP settings for CARD.
-// It reads ~/.claude.json directly for speed (instead of calling `claude mcp list`).
-// It auto-removes the alternate MCP server (card vs card-dev) to avoid confusion.
+// ensureMCPConfigured checks and configures MCP settings for CARD.
 func ensureMCPConfigured(force bool) error {
+	s, err := store.Load(store.Home())
+	if err != nil {
+		return nil
+	}
+
+	rt, err := cardruntime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
+	if err != nil {
+		return nil
+	}
+
 	// Find the card binary path and determine MCP server name
 	cardPath, err := os.Executable()
 	if err != nil {
@@ -2045,86 +2179,13 @@ func ensureMCPConfigured(force bool) error {
 		mcpName = "card"
 	}
 
-	// Determine the alternate name (card <-> card-dev)
-	alternateName := "card"
-	if mcpName == "card" {
-		alternateName = "card-dev"
-	}
-
-	// Read Claude's MCP config directly for speed
-	// Note: MCP servers are stored in ~/.claude.json (not ~/.claude/settings.json)
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil // Silently skip if we can't find home dir
-	}
-	settingsPath := filepath.Join(homeDir, ".claude.json")
-
-	type mcpServerConfig struct {
-		Type    string   `json:"type"`
-		Command string   `json:"command"`
-		Args    []string `json:"args"`
-	}
-	type claudeSettings struct {
-		MCPServers map[string]mcpServerConfig `json:"mcpServers"`
-	}
-
-	var settings claudeSettings
-	settingsData, err := os.ReadFile(settingsPath)
-	if err == nil {
-		// Parse existing settings
-		if err := json.Unmarshal(settingsData, &settings); err != nil {
-			settings = claudeSettings{MCPServers: make(map[string]mcpServerConfig)}
-		}
-	} else {
-		settings = claudeSettings{MCPServers: make(map[string]mcpServerConfig)}
-	}
-
-	if settings.MCPServers == nil {
-		settings.MCPServers = make(map[string]mcpServerConfig)
-	}
-
-	// Check if already correctly configured
 	if !force {
-		if existing, ok := settings.MCPServers[mcpName]; ok {
-			if existing.Command == cardPath {
-				// Already configured with correct path
-				// Still check if we need to remove the alternate
-				if _, hasAlternate := settings.MCPServers[alternateName]; hasAlternate {
-					// Remove alternate from user scope (where we configure)
-					// Also try project scope in case it exists there too
-					exec.Command("claude", "mcp", "remove", alternateName, "-s", "user").Run()
-					exec.Command("claude", "mcp", "remove", alternateName, "-s", "local").Run()
-					ui.Success(fmt.Sprintf("Removed conflicting MCP server (%s)", alternateName))
-				}
-				return nil
-			}
+		if err := rt.ConfigureMCP(cardPath, mcpName); err != nil {
+			return nil
 		}
-	}
-
-	// Remove alternate MCP server if it exists (card vs card-dev)
-	if _, hasAlternate := settings.MCPServers[alternateName]; hasAlternate {
-		exec.Command("claude", "mcp", "remove", alternateName, "-s", "user").Run()
-		exec.Command("claude", "mcp", "remove", alternateName, "-s", "local").Run()
-	}
-
-	// Remove existing server if force reconfiguring or if path changed
-	if existing, ok := settings.MCPServers[mcpName]; ok {
-		if force || existing.Command != cardPath {
-			exec.Command("claude", "mcp", "remove", mcpName, "-s", "user").Run()
-			exec.Command("claude", "mcp", "remove", mcpName, "-s", "local").Run()
-		}
-	}
-
-	// Add CARD MCP server using Claude's native command
-	// Use --scope user to make it available globally
-	cmd := exec.Command("claude", "mcp", "add", "--scope", "user", mcpName, "--", cardPath, "mcp-serve")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		// Silently fail - MCP config is nice-to-have, not critical
-		_ = output
 		return nil
 	}
-
-	ui.Success(fmt.Sprintf("Configured Claude Code to use CARD MCP server (%s)", mcpName))
+	_ = rt.ConfigureMCP(cardPath, mcpName)
 	return nil
 }
 

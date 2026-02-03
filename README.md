@@ -51,7 +51,9 @@ This builds the development binary as `card-dev` to avoid conflicts with the rel
 
 ### Requirements
 
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`) on your PATH
+Install at least one supported runtime:
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
+- Codex CLI (`codex`)
 
 ## Quick Start
 
@@ -65,21 +67,21 @@ card ask                          # Interactive conversation with memory
 card session start "feature X"    # Full artifact relay session
 ```
 
-CARD automatically configures Claude Code's MCP integration on first run. No manual setup required.
+CARD automatically configures the selected runtime's MCP integration on first run. No manual setup required.
 
 ## Two Ways to Use CARD
 
 ### 1. Ask Mode — Conversational Memory
 
-`card ask` starts Claude Code with full access to CARD's engineering memory. Claude proactively surfaces relevant decisions as you work:
+`card ask` starts your configured runtime with full access to CARD's engineering memory. The assistant proactively surfaces relevant decisions as you work:
 
 ```bash
 card ask
 ```
 
-No setup, no specifying files upfront. Just start working and Claude pulls relevant context automatically via CARD's MCP server. This is the fastest way to benefit from CARD. Decisions from past sessions inform your current work.
+No setup, no specifying files upfront. Just start working and the assistant pulls relevant context automatically via CARD's MCP server. This is the fastest way to benefit from CARD. Decisions from past sessions inform your current work.
 
-**Recording decisions:** During `card ask`, Claude can record decisions as you discuss them. This creates a lightweight "ask session" automatically — no manual setup needed. If the conversation evolves into work that needs tracked implementation, Claude can promote the ask session to a full session with all decisions preserved.
+**Recording decisions:** During `card ask`, the assistant can record decisions as you discuss them. This creates a lightweight "ask session" automatically — no manual setup needed. If the conversation evolves into work that needs tracked implementation, the assistant can promote the ask session to a full session with all decisions preserved.
 
 ### 2. Session Mode — Full Artifact Relay
 
@@ -89,7 +91,7 @@ For structured, multi-phase work, CARD runs a 7-phase pipeline:
 INVESTIGATE → PLAN → REVIEW → EXECUTE → VERIFY → SIMPLIFY → RECORD
 ```
 
-Each phase is a **separate Claude Code session** with scoped context. Artifacts from one phase feed the next. This keeps context bounded and agents fresh.
+Each phase is a **separate runtime session** with scoped context. Artifacts from one phase feed the next. This keeps context bounded and agents fresh.
 
 ```bash
 card session start "implement feature X" --repo /path/to/repo
@@ -104,7 +106,7 @@ card session start "implement feature X" --repo /path/to/repo
 6. **Simplify** — Refine code for clarity
 7. **Record** — Produce milestone ledger summarizing the work
 
-At each interactive phase, Claude signals completion via the `card_phase_complete` MCP tool, and CARD automatically advances to the next phase.
+At each interactive phase, the assistant signals completion via the `card_phase_complete` MCP tool, and CARD automatically advances to the next phase.
 
 After **Verify**, CARD asks: *Accept / Re-execute / Pause?* If verification found issues, choose re-execute to loop back to the Execute phase with the verification feedback. Execution logs are versioned (v1, v2, ...) so you can see what changed between attempts.
 
@@ -141,6 +143,7 @@ After **Verify**, CARD asks: *Accept / Re-execute / Pause?* If verification foun
 | **Config** | |
 | `card config show` | Show configuration |
 | `card config set <key> <value>` | Set a config value |
+| `card runtime use <claude\|codex>` | Switch active runtime and set default path |
 | `card clean [--all] [--dry-run]` | Remove old session data |
 
 ## Decision Capsules
@@ -250,6 +253,9 @@ This keeps `~/.card/` bounded while preserving what matters for future recall.
 
 ```yaml
 # ~/.card/config.yaml
+runtime:
+  type: claude            # "claude" (default) or "codex"
+  path: /usr/local/bin/claude  # Optional override
 claude:
   path: claude              # Path to Claude CLI
 session:
@@ -261,6 +267,18 @@ recall:
 ```
 
 Override values: `card config set recall.max_context_blocks 20`
+Switch runtime quickly: `card runtime use codex`
+
+### Runtime Selection
+
+CARD can run against either Claude Code or Codex. Use the helper command to switch both `runtime.type` and `runtime.path` in one step:
+
+```bash
+card runtime use claude
+card runtime use codex
+```
+
+You can override the binary location with `--path` or skip auto-detection with `--auto=false`.
 
 ## Project Structure
 
@@ -276,7 +294,7 @@ internal/
   capsule/         Decision capsule extraction, storage
   recall/          Context assembly, recall engine
   mcp/             MCP server for Claude Code integration
-  claude/          Claude Code CLI wrapper
+  runtime/         Runtime interface + Claude/Codex implementations
   ui/              Terminal output, colors, prompts
 ```
 
