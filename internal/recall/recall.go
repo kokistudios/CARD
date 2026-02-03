@@ -437,7 +437,7 @@ func estimateTokens(s string) int {
 	return (len(s) + 3) / 4
 }
 
-// FormatContext renders recall results as a markdown block for Claude Code prompt injection.
+// FormatContext renders recall results as a markdown block for runtime prompt injection.
 // tokenBudget limits the output size; 0 means unlimited.
 func FormatContext(r *RecallResult, tokenBudget int) string {
 	if len(r.Capsules) == 0 {

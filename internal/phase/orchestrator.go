@@ -158,12 +158,12 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 }
 
 // runSessionWidePhase runs a phase once for the entire session,
-// covering all repos in a single Claude Code invocation.
+// covering all repos in a single runtime invocation.
 func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPhases int) error {
 	idx := phaseIndex(p, SequenceFor(sess.Mode))
 	phaseName := string(p)
 
-	// Use first repo as the working directory for Claude Code
+	// Use first repo as the working directory for the runtime
 	// (Claude can access other repos by absolute path)
 	var primaryRepo *repo.Repo
 	for _, repoID := range sess.Repos {
@@ -242,20 +242,20 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	// Clear any stale phase complete signal from previous runs
 	_ = reposignal.ClearPhaseComplete(workDir)
 
+	rt, err := runtime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
+	if err != nil {
+		return fmt.Errorf("failed to initialize runtime: %w", err)
+	}
+
 	// Determine invocation mode
 	mode := runtime.ModeInteractive
 	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord {
 		mode = runtime.ModeNonInteractive
 	}
 
-	ui.PhaseLaunch(phaseName, mode == runtime.ModeInteractive)
+	ui.PhaseLaunch(phaseName, rt.Name(), mode == runtime.ModeInteractive)
 
-	rt, err := runtime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
-	if err != nil {
-		return fmt.Errorf("failed to initialize runtime: %w", err)
-	}
-
-	// For interactive mode, spinner shows briefly during startup then stops when Claude UI takes over.
+	// For interactive mode, spinner shows briefly during startup then stops when the runtime UI takes over.
 	// For non-interactive mode, spinner runs throughout execution to show progress.
 	var spin *ui.Spinner
 	var onStart func()
@@ -324,7 +324,7 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 
 	// Look for the artifact
 	expectedFilename := artifact.PhaseFilename(phaseName)
-	a, err := locateArtifact(workDir, primaryRepo.LocalPath, expectedFilename, phaseName)
+	a, err := locateArtifact(s, sess.ID, workDir, primaryRepo.LocalPath, expectedFilename, phaseName)
 	if err != nil {
 		return err
 	}
@@ -402,8 +402,8 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	return nil
 }
 
-// locateArtifact finds and loads an artifact from the work directory or repo root.
-func locateArtifact(workDir, repoPath, expectedFilename, phaseName string) (*artifact.Artifact, error) {
+// locateArtifact finds and loads an artifact from the work directory, repo root, or session store.
+func locateArtifact(s *store.Store, sessionID, workDir, repoPath, expectedFilename, phaseName string) (*artifact.Artifact, error) {
 	// 1. Check workDir for exact filename
 	artifactPath := filepath.Join(workDir, expectedFilename)
 	if _, err := os.Stat(artifactPath); err == nil {
@@ -435,6 +435,19 @@ func locateArtifact(workDir, repoPath, expectedFilename, phaseName string) (*art
 		ui.Warning(fmt.Sprintf("Found artifact at %s instead of expected %s — Claude ignored output dir", path, artifactPath))
 		_ = os.Rename(path, artifactPath)
 		return a, nil
+	}
+
+	// 5. Check session store for MCP-written artifacts
+	if s != nil && sessionID != "" {
+		sessionArtifactPath := s.Path("sessions", sessionID, expectedFilename)
+		if _, err := os.Stat(sessionArtifactPath); err == nil {
+			a, err := artifact.Load(sessionArtifactPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse session artifact: %w", err)
+			}
+			ui.Warning(fmt.Sprintf("Found artifact in session store at %s — using it for ingestion", sessionArtifactPath))
+			return a, nil
+		}
 	}
 
 	return nil, fmt.Errorf("no artifact found after %s phase — expected %s in %s or %s", phaseName, expectedFilename, workDir, repoPath)

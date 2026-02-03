@@ -2046,10 +2046,19 @@ func (s *Server) handleWriteArtifact(ctx context.Context, req *mcp.CallToolReque
 		return nil, nil, fmt.Errorf("invalid phase: %s (must be investigate, plan, execute, or record)", args.Phase)
 	}
 
-	// Store at session level
+	// Store at session level (canonical location)
 	destPath, err := artifact.StoreSessionLevel(s.store, args.SessionID, a)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to store artifact: %w", err)
+	}
+
+	// If running inside a phase runtime, also mirror to the work directory
+	if outputDir := os.Getenv("CARD_OUTPUT_DIR"); outputDir != "" {
+		workPath := filepath.Join(outputDir, artifact.PhaseFilename(args.Phase))
+		// Best-effort mirror; do not fail if this write fails
+		if err := os.WriteFile(workPath, []byte(a.RawContent), 0644); err == nil {
+			destPath = workPath
+		}
 	}
 
 	return nil, WriteArtifactResult{

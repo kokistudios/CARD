@@ -128,7 +128,7 @@ func (c *ClaudeRuntime) pathOrDefault() string {
 func claudeAvailableAt(path string) error {
 	_, err := exec.LookPath(path)
 	if err != nil {
-		return fmt.Errorf("claude CLI not found at %q — install Claude Code (https://claude.ai/code) to use CARD sessions", path)
+		return fmt.Errorf("claude CLI not found at %q — install the Claude CLI (https://claude.ai/code) to use CARD sessions", path)
 	}
 	return nil
 }

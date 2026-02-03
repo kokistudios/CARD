@@ -236,11 +236,15 @@ func PhaseHeader(phase string, index, total int, repoName, repoID string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// PhaseLaunch prints a styled "launching Claude Code" message.
+// PhaseLaunch prints a styled "launching runtime" message.
 // If interactive, shows a green prompt telling the user to type "Go".
-func PhaseLaunch(phase string, interactive bool) {
-	fmt.Fprintf(os.Stderr, "\n%s Launching Claude Code for %s phase\n",
-		headerStyle.Render("──"), boldStyle.Render(strings.ToUpper(phase)))
+func PhaseLaunch(phase, runtimeName string, interactive bool) {
+	display := strings.ToUpper(runtimeName)
+	if strings.TrimSpace(display) == "" {
+		display = "RUNTIME"
+	}
+	fmt.Fprintf(os.Stderr, "\n%s Launching %s for %s phase\n",
+		headerStyle.Render("──"), boldStyle.Render(display), boldStyle.Render(strings.ToUpper(phase)))
 	if interactive {
 		fmt.Fprintf(os.Stderr, "%s\n\n",
 			successStyle.Render("    ➤ Type \"Go\" below to begin"))
@@ -1031,4 +1035,3 @@ func AnimatedWisdomBanner() {
 	}
 	// bubbletea leaves the final View() on screen, no need to reprint
 }
-

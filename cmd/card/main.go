@@ -326,7 +326,7 @@ func sessionStartCmd() *cobra.Command {
 				}
 
 				ui.Info("Investigation prompt would be rendered with the above context.")
-				ui.EmptyState("No files created. No Claude Code invocation.")
+				ui.EmptyState("No files created. No runtime invocation.")
 				return nil
 			}
 
@@ -1348,7 +1348,7 @@ func preflightCmd() *cobra.Command {
 		Long: `Get a pre-flight briefing before working on files.
 
 Combines file context, relevant decisions, and patterns into actionable guidance.
-Useful with Claude Code hooks to surface context before file modifications.`,
+Useful with runtime hooks to surface context before file modifications.`,
 		Example: `  card preflight --files src/auth/guard.ts
   card preflight --files src/auth/guard.ts --intent "adding rate limiting"
   card preflight --files src/auth.ts src/middleware.ts --format json`,
@@ -2043,7 +2043,7 @@ func mcpServeCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:    "mcp-serve",
 		Short:  "Run CARD as an MCP server",
-		Long:   "Start CARD as a Model Context Protocol (MCP) server over stdio. This allows Claude Code and other MCP-compatible tools to query CARD's engineering memory directly.",
+		Long:   "Start CARD as a Model Context Protocol (MCP) server over stdio. This allows MCP-compatible tools to query CARD's engineering memory directly.",
 		Hidden: true, // Not typically called directly by users
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := loadStore()
@@ -2145,7 +2145,7 @@ On first run, this command will configure the runtime to use CARD's MCP server.`
 	}
 
 	cmd.Flags().StringVar(&repoPath, "repo", "", "Repository path to work in")
-	cmd.Flags().BoolVar(&setupMCP, "setup-mcp", false, "Force reconfiguration of Claude Code MCP settings")
+	cmd.Flags().BoolVar(&setupMCP, "setup-mcp", false, "Force reconfiguration of MCP settings")
 
 	return cmd
 }

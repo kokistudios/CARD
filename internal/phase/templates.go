@@ -82,11 +82,11 @@ func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, wor
 		Repos:             repos,
 		ExecutionAttempts: len(sess.ExecutionHistory),
 		ExecutionHistory:  execHistory,
-		IsReExecution:     len(sess.ExecutionHistory) > 0,
+		IsReExecution:     len(sess.ExecutionHistory) > 1,
 	}
 
 	// Set prior attempt info for re-executions
-	if len(sess.ExecutionHistory) > 0 {
+	if len(sess.ExecutionHistory) > 1 {
 		lastAttempt := sess.ExecutionHistory[len(sess.ExecutionHistory)-1]
 		data.PriorAttemptOutcome = lastAttempt.Outcome
 		data.PriorAttemptReason = lastAttempt.Reason
