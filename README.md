@@ -108,6 +108,22 @@ card session start "implement feature X" --repo /path/to/repo
 
 At each interactive phase, the assistant signals completion via the `card_phase_complete` MCP tool, and CARD automatically advances to the next phase.
 
+**Optional: Conclude Phase**
+
+After a session is completed, you can revisit it to review and clarify the captured decisions:
+
+```bash
+card session conclude 20260130-auth-refactor
+```
+
+This runs an optional **Conclude** phase that lets you:
+- Review all decisions captured during the session
+- Validate that they accurately reflect what was done
+- Add clarifications or corrections
+- Sign off on the engineering record
+
+Use this when you discover after completion that a decision's rationale needs refinement, or when post-deployment learnings should be captured.
+
 After **Verify**, CARD asks: *Accept / Re-execute / Pause?* If verification found issues, choose re-execute to loop back to the Execute phase with the verification feedback. Execution logs are versioned (v1, v2, ...) so you can see what changed between attempts.
 
 ## Commands
@@ -127,6 +143,7 @@ After **Verify**, CARD asks: *Accept / Re-execute / Pause?* If verification foun
 | `card session end [id]` | Complete a session |
 | `card session abandon [id]` | Abandon a session |
 | `card session retry [id]` | Retry the current phase |
+| `card session conclude <id>` | Review and clarify decisions for a completed session |
 | **Memory** | |
 | `card recall --files src/auth.ts` | Recall decisions by file |
 | `card recall --tag auth` | Search decisions by tag |

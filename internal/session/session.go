@@ -42,8 +42,9 @@ const (
 	StatusExecuting     SessionStatus = "executing"
 	StatusVerifying     SessionStatus = "verifying"
 	StatusSimplifying   SessionStatus = "simplifying"
-	StatusRecording SessionStatus = "recording"
-	StatusCompleted SessionStatus = "completed"
+	StatusRecording     SessionStatus = "recording"
+	StatusConcluding    SessionStatus = "concluding" // Optional ad-hoc phase for post-session review
+	StatusCompleted     SessionStatus = "completed"
 	StatusPaused        SessionStatus = "paused"
 	StatusAbandoned     SessionStatus = "abandoned"
 )
@@ -108,6 +109,7 @@ var validTransitions = map[SessionStatus][]SessionStatus{
 	StatusVerifying:     {StatusSimplifying, StatusExecuting}, // can loop back to execute
 	StatusSimplifying:   {StatusRecording},
 	StatusRecording:     {StatusCompleted},
+	StatusConcluding:    {StatusCompleted}, // conclude returns to completed
 }
 
 var terminalStatuses = map[SessionStatus]bool{
@@ -257,6 +259,12 @@ func Transition(s *store.Store, id string, newStatus SessionStatus) error {
 	sess, err := Get(s, id)
 	if err != nil {
 		return err
+	}
+
+	if sess.Status == StatusCompleted && newStatus == StatusConcluding {
+		sess.Status = newStatus
+		sess.UpdatedAt = time.Now().UTC()
+		return save(s, sess)
 	}
 
 	if terminalStatuses[sess.Status] {

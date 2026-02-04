@@ -25,7 +25,9 @@ Working across {{len .Repos}} repositories:
 {{end}}
 
 {{if .PriorArtifactContent}}
-### Execution Log (for reference)
+### Prior Context (execution log and verification notes)
+
+Use these to identify which files were modified. Then read the actual files to see current code state before simplifying.
 
 {{.PriorArtifactContent}}
 {{end}}

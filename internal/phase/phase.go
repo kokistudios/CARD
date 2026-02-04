@@ -14,6 +14,7 @@ const (
 	PhaseVerify      Phase = "verify"
 	PhaseSimplify    Phase = "simplify"
 	PhaseRecord      Phase = "record"
+	PhaseConclude    Phase = "conclude" // Optional ad-hoc phase, not in standard Sequence()
 )
 
 func Sequence() []Phase {
@@ -57,6 +58,8 @@ func SessionStatus(p Phase) session.SessionStatus {
 		return session.StatusSimplifying
 	case PhaseRecord:
 		return session.StatusRecording
+	case PhaseConclude:
+		return session.StatusConcluding
 	default:
 		return session.StatusStarted
 	}

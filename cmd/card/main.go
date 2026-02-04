@@ -257,6 +257,7 @@ func sessionCmd() *cobra.Command {
 	cmd.AddCommand(sessionEndCmd())
 	cmd.AddCommand(sessionAbandonCmd())
 	cmd.AddCommand(sessionRetryCmd())
+	cmd.AddCommand(sessionConcludeCmd())
 	return cmd
 }
 
@@ -680,6 +681,38 @@ func sessionRetryCmd() *cobra.Command {
 			}
 			ui.Info(fmt.Sprintf("Retrying %s phase for session %s", currentPhase, id))
 			return phase.RunSessionFromPhase(s, sess, currentPhase)
+		},
+	}
+}
+
+func sessionConcludeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "conclude <session-id>",
+		Short: "Review and clarify decisions for a completed session",
+		Long: `Run the conclude phase on a completed session.
+
+This optional phase allows you to:
+- Review all decisions captured during the session
+- Validate that they accurately reflect what was done
+- Add clarifications or corrections
+- Sign off on the engineering record
+
+Use this when you want to revisit a completed session's decisions
+before they become permanent engineering history.`,
+		Example: `  card session conclude 20260130-add-auth-abc123`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := loadStore()
+			if err != nil {
+				return err
+			}
+
+			sess, err := session.Get(s, args[0])
+			if err != nil {
+				return err
+			}
+
+			return phase.RunConcludePhase(s, sess)
 		},
 	}
 }

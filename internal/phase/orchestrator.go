@@ -224,7 +224,7 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	spin.Stop()
 	if err != nil {
 		if errors.Is(err, runtime.ErrPhaseComplete) {
-					sig, sigErr := reposignal.CheckPhaseComplete(workDir)
+			sig, sigErr := reposignal.CheckPhaseComplete(workDir)
 			if sigErr == nil && sig != nil {
 				switch sig.Status {
 				case "complete":
@@ -439,7 +439,7 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 
 		switch decision {
 		case "accept":
-				sess.UpdateLastExecutionOutcome("completed", "")
+			sess.UpdateLastExecutionOutcome("completed", "")
 			_ = session.Update(s, sess)
 			return nil
 		case "reexecute":
@@ -472,11 +472,19 @@ func loadPriorArtifacts(s *store.Store, sessionID string, currentPhase Phase) []
 	sessionDir := s.Path("sessions", sessionID)
 	seen := make(map[string]bool)
 
+	relevantForSimplify := map[Phase]bool{
+		PhaseExecute: true,
+		PhaseVerify:  true,
+	}
+
 	for _, p := range Sequence() {
 		if p == currentPhase {
 			break
 		}
 		if !ProducesArtifact(p) {
+			continue
+		}
+		if currentPhase == PhaseSimplify && !relevantForSimplify[p] {
 			continue
 		}
 		filename := artifact.PhaseFilename(string(p))
@@ -553,9 +561,45 @@ func CurrentPhase(status session.SessionStatus) (Phase, error) {
 		return PhaseSimplify, nil
 	case session.StatusRecording:
 		return PhaseRecord, nil
+	case session.StatusConcluding:
+		return PhaseConclude, nil
 	default:
 		return "", fmt.Errorf("session status %s is not retryable", status)
 	}
+}
+
+// RunConcludePhase runs the optional conclude phase on a completed session.
+// This allows developers to review and clarify decisions after session completion.
+func RunConcludePhase(s *store.Store, sess *session.Session) error {
+	if sess.Status != session.StatusCompleted {
+		return fmt.Errorf("conclude can only be run on completed sessions (current status: %s)", sess.Status)
+	}
+
+	ui.LogoWithTagline("conclude mode")
+	ui.Info(fmt.Sprintf("Running conclude phase for session: %s", sess.ID))
+
+	// Transition to concluding status
+	if err := session.Transition(s, sess.ID, session.StatusConcluding); err != nil {
+		return fmt.Errorf("failed to transition to concluding: %w", err)
+	}
+
+	sess, err := session.Get(s, sess.ID)
+	if err != nil {
+		return err
+	}
+
+	// Run the conclude phase (1 of 1 for this ad-hoc run)
+	if err := runSessionWidePhase(s, sess, PhaseConclude, 1); err != nil {
+		return err
+	}
+
+	// Transition back to completed
+	if err := session.Transition(s, sess.ID, session.StatusCompleted); err != nil {
+		return fmt.Errorf("failed to transition back to completed: %w", err)
+	}
+
+	ui.Info(fmt.Sprintf("Session %s conclude phase complete.", sess.ID))
+	return nil
 }
 
 func saveChange(s *store.Store, ch *change.Change) {

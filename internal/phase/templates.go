@@ -49,6 +49,13 @@ type templateData struct {
 
 func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, workDir string, priorArtifacts []*artifact.Artifact) (string, error) {
 	filename := fmt.Sprintf("templates/%s.md", string(p))
+
+	// Use conclude-standard.md for standard sessions running conclude phase
+	// (conclude.md is reserved for future research mode)
+	if p == PhaseConclude && sess.Mode != "research" {
+		filename = "templates/conclude-standard.md"
+	}
+
 	raw, err := templateFS.ReadFile(filename)
 	if err != nil {
 		return "", fmt.Errorf("template not found for %s phase: %w", p, err)
@@ -130,7 +137,7 @@ func RenderSessionWideInitialMessage(s *store.Store, sess *session.Session, p Ph
 
 	// For non-interactive phases, add "Go" to trigger the agent to start
 	// (templates instruct agents to wait for "Go" before beginning work)
-	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord {
+	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord || p == PhaseConclude {
 		msg += "\n\nGo"
 	}
 

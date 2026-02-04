@@ -2089,6 +2089,7 @@ func normalizeStatusToPhase(status string) string {
 		"verifying":     "verify",
 		"simplifying":   "simplify",
 		"recording":     "record",
+		"concluding":    "conclude",
 	}
 	if phase, ok := statusToPhase[status]; ok {
 		return phase
