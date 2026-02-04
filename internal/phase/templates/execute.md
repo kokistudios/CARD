@@ -173,12 +173,14 @@ The execution log is critical — it's the handoff artifact that preserves imple
 
 When you make decisions during execution (deviations, runtime choices), **record them immediately using the `card_decision` MCP tool**.
 
-**For ARCHITECTURAL decisions** (significant deviations, trade-offs):
-- Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+**Record when:** A choice point existed, a constraint was discovered, it's cross-cutting, or it's counter-intuitive.
+
+**For DECISIONS** (significant deviations, trade-offs):
+- Use `card_decision` with `type: "decision"`, `require_confirmation: true`
 - Present to developer before proceeding
 
-**For IMPLEMENTATION decisions** (minor adjustments, obvious choices):
-- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+**For FINDINGS** (discovered constraints, minor adjustments):
+- Use `card_decision` with `type: "finding"`, `require_confirmation: false`
 
 In the artifact, reference decisions by ID:
 "Deviated from plan per [`<capsule_id>`]: used async approach instead of synchronous..."

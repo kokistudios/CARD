@@ -85,12 +85,12 @@ If no changes were needed, produce the plan as-is with a Review Summary noting "
 
 When decisions are made or changed during review, **record them using the `card_decision` MCP tool**.
 
-**For ARCHITECTURAL decisions** (changes to approach, new trade-offs):
-- Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+**For DECISIONS** (changes to approach, new trade-offs):
+- Use `card_decision` with `type: "decision"`, `require_confirmation: true`
 - This is interactive — wait for human confirmation
 
-**For review amendments** (minor clarifications):
-- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+**For FINDINGS** (minor clarifications, discovered constraints):
+- Use `card_decision` with `type: "finding"`, `require_confirmation: false`
 
 In the artifact, reference decisions by ID:
 "[Amended during review per [`<capsule_id>`]: changed from X to Y]"

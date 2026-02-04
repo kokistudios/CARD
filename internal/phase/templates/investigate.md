@@ -139,27 +139,27 @@ Followed by the investigation summary with these sections:
 
 When you make or identify a decision during this phase, **record it immediately using the `card_decision` MCP tool** instead of writing decision blocks to artifacts.
 
-### Determine Significance First
+### WHEN TO RECORD:
+1. **A choice point existed** — Multiple viable approaches were considered and one was selected
+2. **A constraint was discovered** — Something blocks the obvious approach
+3. **It's cross-cutting** — The choice creates a pattern other code must follow
+4. **It's counter-intuitive** — The obvious approach wasn't taken, and the code doesn't explain why
 
-- **architectural**: Trade-offs, multiple viable alternatives, shapes future work
-  → Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
-- **implementation**: Pattern-following, obvious choices, easily reversible
-  → Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
-- **context**: Facts discovered, constraints, not really decisions
-  → Use `card_decision` with `significance: "context"`, `require_confirmation: false`
+### DO NOT RECORD when:
+1. It's idiomatic — The language/framework/codebase already prescribes this
+2. It's the only reasonable option — No real alternative existed
+3. It's already recorded — You're following a pattern already in CARD or obvious in the codebase
+4. The code is self-documenting — The WHY is obvious from reading the WHAT
 
-### For ARCHITECTURAL decisions:
-
-1. Call `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+### For DECISIONS (choices among alternatives):
+1. Call `card_decision` with `type: "decision"`, `require_confirmation: true`
 2. Review the response for similar/contradicting decisions
 3. Present to the developer: "I recommend X because Y. This contradicts/relates to Z. Agree?"
 4. After confirmation, call `card_decision_confirm`
 
-### For IMPLEMENTATION/CONTEXT decisions:
-
-1. Call `card_decision` with appropriate significance, `require_confirmation: false`
+### For FINDINGS (facts/constraints discovered):
+1. Call `card_decision` with `type: "finding"`, `require_confirmation: false`
 2. Continue without waiting — stored immediately
-3. These surface in batch review at phase end (optional)
 
 ### In the artifact, reference decisions by ID:
 

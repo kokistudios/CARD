@@ -9,12 +9,11 @@ import (
 
 // GraphNode represents a node in the dependency graph.
 type GraphNode struct {
-	ID           string       `json:"id"`
-	Question     string       `json:"question"`
-	Choice       string       `json:"choice"`
-	Significance Significance `json:"significance,omitempty"`
-	SessionID    string       `json:"session_id,omitempty"`
-	Distance     int          `json:"distance"` // Distance from root (0 = root)
+	ID        string `json:"id"`
+	Question  string `json:"question"`
+	Choice    string `json:"choice"`
+	SessionID string `json:"session_id,omitempty"`
+	Distance  int    `json:"distance"` // Distance from root (0 = root)
 }
 
 // GraphEdge represents an edge in the dependency graph.
@@ -59,12 +58,11 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 
 	result := &GraphResult{
 		Root: GraphNode{
-			ID:           root.ID,
-			Question:     root.Question,
-			Choice:       root.Choice,
-			Significance: root.Significance,
-			SessionID:    root.SessionID,
-			Distance:     0,
+			ID:        root.ID,
+			Question:  root.Question,
+			Choice:    root.Choice,
+			SessionID: root.SessionID,
+			Distance:  0,
 		},
 		Nodes:     []GraphNode{},
 		Edges:     []GraphEdge{},
@@ -114,12 +112,11 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 		// Add node (skip root, it's already set)
 		if item.distance > 0 {
 			result.Nodes = append(result.Nodes, GraphNode{
-				ID:           c.ID,
-				Question:     c.Question,
-				Choice:       c.Choice,
-				Significance: c.Significance,
-				SessionID:    c.SessionID,
-				Distance:     item.distance,
+				ID:        c.ID,
+				Question:  c.Question,
+				Choice:    c.Choice,
+				SessionID: c.SessionID,
+				Distance:  item.distance,
 			})
 		}
 

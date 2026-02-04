@@ -81,14 +81,16 @@ status: final
 
 ### Decision Capture
 
-When you make planning decisions, **record them immediately using the `card_decision` MCP tool**.
+When you make planning decisions, **record them using the `card_decision` MCP tool**.
 
-**For ARCHITECTURAL decisions** (trade-offs, multiple alternatives, shapes future work):
-- Use `card_decision` with `significance: "architectural"`, `require_confirmation: false`
+**Record when:** A choice point existed, a constraint was discovered, it's cross-cutting, or it's counter-intuitive.
+
+**For DECISIONS** (trade-offs, multiple alternatives):
+- Use `card_decision` with `type: "decision"`, `require_confirmation: false`
   (Planning phase is non-interactive, so no confirmation needed)
 
-**For IMPLEMENTATION decisions** (pattern-following, obvious choices):
-- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+**For FINDINGS** (discovered constraints, obvious choices):
+- Use `card_decision` with `type: "finding"`, `require_confirmation: false`
 
 In the artifact, reference decisions by ID instead of writing `### Decision:` blocks:
 "As per [`<capsule_id>`], we'll structure the migration in three steps..."

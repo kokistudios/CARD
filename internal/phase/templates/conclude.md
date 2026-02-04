@@ -141,15 +141,13 @@ card_decision({
   "alternatives": ["Other interpretations considered"],
   "rationale": "Why this conclusion, what evidence supports it",
   "tags": ["file:path/to/relevant.go", "concept:name"],
-  "significance": "context",
   "require_confirmation": false,
   "origin": "agent"
 })
 ```
 
-**Significance for research:**
-- **context**: Most findings — facts discovered, observations (use `require_confirmation: false`)
-- **architectural**: Findings that will significantly shape future work (use `require_confirmation: true`)
+**For FINDINGS** — facts discovered, observations: use `require_confirmation: false`
+**For DECISIONS** — findings that will significantly shape future work: use `require_confirmation: true`
 
 In the artifact, reference findings by capsule ID:
 "As discovered in [`<capsule_id>`], the authentication system..."

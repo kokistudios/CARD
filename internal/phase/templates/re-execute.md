@@ -143,11 +143,11 @@ The execution log is critical — it's the handoff artifact that preserves imple
 
 When you make decisions during re-execution (remediation choices, new deviations), **record them immediately using the `card_decision` MCP tool** instead of writing decision blocks to the artifact.
 
-**For remediation decisions** (how to fix an identified issue):
-- Use `card_decision` with `significance: "implementation"`, `require_confirmation: false`
+**For FINDINGS** (remediation choices based on verification feedback):
+- Use `card_decision` with `type: "finding"`, `require_confirmation: false`
 
-**For approach changes** (significant deviations from the original fix strategy):
-- Use `card_decision` with `significance: "architectural"`, `require_confirmation: true`
+**For DECISIONS** (significant deviations from the original fix strategy):
+- Use `card_decision` with `type: "decision"`, `require_confirmation: true`
 - Wait for developer confirmation before proceeding
 
 In your execution log, reference decisions by capsule ID instead of redocumenting them:

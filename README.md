@@ -180,8 +180,8 @@ In `card ask` mode, Claude has MCP tools to query and update CARD's memory:
 
 **Recording tools:**
 - `card_record` — Capture a decision immediately (creates ask session automatically)
-- `card_decision` — Record decision with significance tier and optional human confirmation
-- `card_decision_confirm` — Confirm or supersede a proposed architectural decision
+- `card_decision` — Record decision or finding with optional human confirmation
+- `card_decision_confirm` — Confirm or supersede a proposed decision
 
 **Operations:**
 - `card_session_ops` — Session operations (summary, artifacts, history, review, dedupe)

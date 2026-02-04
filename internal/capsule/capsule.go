@@ -33,14 +33,6 @@ const (
 	TypeFinding  CapsuleType = "finding"  // Observation or conclusion (no alternatives)
 )
 
-// Significance represents the impact tier of a decision.
-type Significance string
-
-const (
-	SignificanceArchitectural   Significance = "architectural"   // Trade-offs, multiple viable alternatives, shapes future work
-	SignificanceImplementation  Significance = "implementation"  // Pattern-following, obvious choices, easily reversible
-	SignificanceContext         Significance = "context"         // Facts discovered, constraints identified, not really decisions
-)
 
 // Confirmation indicates how the decision was confirmed.
 type Confirmation string
@@ -79,8 +71,7 @@ type Capsule struct {
 	Type   CapsuleType   `yaml:"type,omitempty"`
 
 	// Decision system redesign fields
-	Significance  Significance `yaml:"significance,omitempty"`  // architectural, implementation, context
-	PatternID     string       `yaml:"pattern_id,omitempty"`    // Links to pattern this established/follows
+	PatternID    string `yaml:"pattern_id,omitempty"` // Links to pattern this established/follows
 	Origin        string       `yaml:"origin,omitempty"`        // "human" or "agent" (replaces Source)
 	Confirmation  Confirmation `yaml:"confirmation,omitempty"`  // explicit, implicit
 	CreatedAt     time.Time    `yaml:"created_at,omitempty"`    // When capsule was created (for temporal queries)
@@ -112,8 +103,7 @@ type Filter struct {
 	Tag                *string       // match against Tags
 	Status             *CapsuleStatus // filter by status (only 'invalidated' is meaningful; empty = active)
 	Type               *CapsuleType   // filter by type (decision, finding)
-	Significance       *Significance  // filter by significance tier
-	IncludeInvalidated bool          // if true, include invalidated capsules (default: exclude)
+	IncludeInvalidated bool           // if true, include invalidated capsules (default: exclude)
 	ShowEvolution      bool          // if false (default), deduplicate to latest phase per question
 }
 
@@ -316,9 +306,6 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 				fmt.Fprintf(&buf, "- **Type:** %s\n", c.Type)
 			}
 			// New decision system redesign fields
-			if c.Significance != "" {
-				fmt.Fprintf(&buf, "- **Significance:** %s\n", c.Significance)
-			}
 			if c.Confirmation != "" {
 				fmt.Fprintf(&buf, "- **Confirmation:** %s\n", c.Confirmation)
 			}
@@ -483,14 +470,6 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 			c.Origin = extractField(decBlock, "Origin")
 			if c.Origin == "" && c.Source != "" {
 				c.Origin = c.Source // Migrate Source to Origin
-			}
-
-			// Significance (default to implementation for backwards compatibility)
-			sigStr := extractField(decBlock, "Significance")
-			if sigStr != "" {
-				c.Significance = Significance(strings.ToLower(sigStr))
-			} else {
-				c.Significance = SignificanceImplementation // Default for legacy capsules
 			}
 
 			// Confirmation (default to implicit for backwards compatibility)
@@ -852,10 +831,6 @@ func matchesFilter(c *Capsule, f Filter) bool {
 		return false
 	}
 	if f.Type != nil && c.Type != *f.Type {
-		return false
-	}
-	// Filter by significance tier
-	if f.Significance != nil && c.Significance != *f.Significance {
 		return false
 	}
 	// Exclude invalidated capsules unless explicitly requested

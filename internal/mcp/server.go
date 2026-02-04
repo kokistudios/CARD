@@ -117,22 +117,27 @@ func (s *Server) registerTools() {
 			"Content MUST include valid YAML frontmatter with session, phase, timestamp, and status fields.",
 	}, s.handleWriteArtifact)
 
-	// card_decision - unified decision recording with significance tiers
+	// card_decision - decision recording with threshold guidance
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_decision",
-		Description: "Record a decision with significance tier and optional human confirmation. " +
-			"SIGNIFICANCE TIERS:\n" +
-			"- 'architectural': Trade-off decisions, multiple viable alternatives, shapes future work. " +
-			"Use require_confirmation=true for human review.\n" +
-			"- 'implementation': Pattern-following, obvious choices, easily reversible. " +
-			"Use require_confirmation=false for immediate storage.\n" +
-			"- 'context': Facts discovered, constraints identified, not really decisions. " +
-			"Use require_confirmation=false.\n\n" +
+		Description: "Record a decision or finding with optional human confirmation.\n\n" +
+			"WHEN TO RECORD:\n" +
+			"1. A choice point existed — Multiple viable approaches were considered and one was selected\n" +
+			"2. A constraint was discovered — Something blocks the obvious approach\n" +
+			"3. It's cross-cutting — The choice creates a pattern other code must follow\n" +
+			"4. It's counter-intuitive — The obvious approach wasn't taken, and the code doesn't explain why\n\n" +
+			"DO NOT RECORD when:\n" +
+			"1. It's idiomatic — The language/framework/codebase already prescribes this\n" +
+			"2. It's the only reasonable option — No real alternative existed\n" +
+			"3. It's already recorded — You're following a pattern already in CARD or obvious in the codebase\n" +
+			"4. The code is self-documenting — The WHY is obvious from reading the WHAT\n\n" +
+			"TYPES:\n" +
+			"- 'decision': A choice was made among alternatives (use require_confirmation=true)\n" +
+			"- 'finding': A fact/constraint was discovered (use require_confirmation=false)\n\n" +
 			"FLOW:\n" +
 			"- require_confirmation=false: Stores immediately, returns capsule_id\n" +
 			"- require_confirmation=true: Returns proposal_id with similar/contradicting decisions. " +
 			"Present to human, then call card_decision_confirm to finalize.\n\n" +
-			"This replaces manual '### Decision:' blocks in artifacts. " +
 			"Decisions captured here are immediately queryable via card_query. " +
 			"If no session_id provided, finds the most recent active session or creates an ask session automatically.",
 	}, s.handleDecision)
@@ -234,7 +239,6 @@ type RecallArgs struct {
 	IncludeEvolution   bool     `json:"include_evolution,omitempty" jsonschema:"If true, show all phases of each decision instead of just the latest (default: false)"`
 	Status             string   `json:"status,omitempty" jsonschema:"Filter by capsule status: 'invalidated' to see only invalidated decisions (optional - returns active decisions if not specified)"`
 	Format             string   `json:"format,omitempty" jsonschema:"Output format: 'full' (default) or 'compact' (IDs and choices only)"`
-	Significance       string   `json:"significance,omitempty" jsonschema:"Filter by significance tier: 'architectural', 'implementation', 'context', or 'all' (default: 'all')"`
 	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"If true, include invalidated decisions (default: false - excludes invalidated)"`
 }
 
@@ -257,7 +261,6 @@ type CapsuleSummary struct {
 	MatchTier    string   `json:"match_tier,omitempty"`
 	Status       string   `json:"status"`                  // empty (active) or invalidated
 	Type         string   `json:"type,omitempty"`          // decision or finding
-	Significance string   `json:"significance,omitempty"`  // architectural, implementation, context
 	SupersededBy string   `json:"superseded_by,omitempty"` // If invalidated, what replaced it
 	Recency      string   `json:"recency,omitempty"`       // Human-readable time (e.g., "2 days ago")
 	PensieveLink string   `json:"pensieve_link,omitempty"` // Path to milestone_ledger
@@ -312,13 +315,6 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		statusFilter = &status
 	}
 
-	// Filter by significance if specified
-	var significanceFilter *capsule.Significance
-	if args.Significance != "" && args.Significance != "all" {
-		sig := capsule.Significance(strings.ToLower(args.Significance))
-		significanceFilter = &sig
-	}
-
 	isCompact := args.Format == "compact"
 
 	for _, sc := range result.Capsules {
@@ -332,11 +328,6 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 			continue
 		}
 
-		// Apply significance filter
-		if significanceFilter != nil && sc.Significance != *significanceFilter {
-			continue
-		}
-
 		summary := CapsuleSummary{
 			ID:           sc.ID,
 			SessionID:    sc.SessionID,
@@ -345,7 +336,6 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 			Choice:       sc.Choice,
 			Status:       string(sc.Status),
 			Type:         string(sc.Type),
-			Significance: string(sc.Significance),
 			SupersededBy: sc.SupersededBy,
 			Recency:      formatRelativeTime(sc.Timestamp),
 			PensieveLink: fmt.Sprintf("~/.card/sessions/%s/milestone_ledger.md", sc.SessionID),
@@ -914,8 +904,7 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 
 // FileContextArgs defines input for card_file_context.
 type FileContextArgs struct {
-	Files        []string `json:"files" jsonschema:"File paths to get context for (e.g. ['src/auth/guard.ts'])"`
-	Significance string   `json:"significance,omitempty" jsonschema:"'architectural' (default) or 'all'. Use 'all' for complete history."`
+	Files []string `json:"files" jsonschema:"File paths to get context for (e.g. ['src/auth/guard.ts'])"`
 }
 
 // FileDecisions represents decisions related to a specific file.
@@ -939,9 +928,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		return nil, nil, fmt.Errorf("at least one file path is required")
 	}
 
-	// Default to architectural only (reduces noise)
-	filterArchitecturalOnly := args.Significance != "all"
-
 	out := FileContextResult{
 		Files: make(map[string]FileDecisions),
 	}
@@ -960,10 +946,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		for _, c := range allCapsules {
 			// Skip invalidated capsules
 			if c.Status == capsule.StatusInvalidated {
-				continue
-			}
-			// Filter by significance (default: architectural only)
-			if filterArchitecturalOnly && c.Significance != capsule.SignificanceArchitectural {
 				continue
 			}
 			if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
@@ -1026,7 +1008,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 				Rationale:    c.Rationale,
 				Tags:         c.Tags,
 				Status:       string(c.Status),
-				Significance: string(c.Significance),
 			})
 		}
 
@@ -1056,8 +1037,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 
 	if len(out.Files) == 0 {
 		out.Message = "No prior decisions found for these files."
-	} else if filterArchitecturalOnly {
-		out.Message = "Showing architectural decisions only. Use significance: 'all' for complete history."
 	}
 
 	return nil, out, nil
@@ -1600,9 +1579,8 @@ func extractPatternsFromLedger(content string) []Pattern {
 
 // PreflightArgs defines input for card_preflight.
 type PreflightArgs struct {
-	Files        []string `json:"files" jsonschema:"File paths to get pre-flight briefing for"`
-	Intent       string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting', 'refactoring auth')"`
-	Significance string   `json:"significance,omitempty" jsonschema:"'architectural' (default) or 'all'. Use 'all' for complete history."`
+	Files  []string `json:"files" jsonschema:"File paths to get pre-flight briefing for"`
+	Intent string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting', 'refactoring auth')"`
 }
 
 // PreflightResult is the output of card_preflight.
@@ -1619,9 +1597,6 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		return nil, nil, fmt.Errorf("at least one file path is required")
 	}
 
-	// Default to architectural only (reduces noise)
-	filterArchitecturalOnly := args.Significance != "all"
-
 	out := PreflightResult{
 		Files: make(map[string]FileDecisions),
 	}
@@ -1637,10 +1612,6 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		for _, c := range allCapsules {
 			// Skip invalidated capsules
 			if c.Status == capsule.StatusInvalidated {
-				continue
-			}
-			// Filter by significance (default: architectural only)
-			if filterArchitecturalOnly && c.Significance != capsule.SignificanceArchitectural {
 				continue
 			}
 			if capsule.MatchesTagQuery(c.Tags, "file:"+file) || capsule.MatchesTagQuery(c.Tags, file) {
@@ -1914,7 +1885,23 @@ I'll follow these patterns in my implementation."
 - Example: "For full context, see session 20260130-auth-refactor"
 
 ## Recording Decisions
-- Use card_record() to capture significant decisions mid-task
+
+### WHEN TO RECORD:
+1. A choice point existed — Multiple viable approaches were considered and one was selected
+2. A constraint was discovered — Something blocks the obvious approach
+3. It's cross-cutting — The choice creates a pattern other code must follow
+4. It's counter-intuitive — The obvious approach wasn't taken, and the code doesn't explain why
+
+### DO NOT RECORD when:
+1. It's idiomatic — The language/framework/codebase already prescribes this
+2. It's the only reasonable option — No real alternative existed
+3. It's already recorded — You're following a pattern already in CARD or obvious in the codebase
+4. The code is self-documenting — The WHY is obvious from reading the WHAT
+
+### How to record:
+- Use card_record() to capture decisions mid-task
+- Use card_decision(type='decision', require_confirmation=true) for decisions needing human confirmation
+- Use card_decision(type='finding', require_confirmation=false) for discovered constraints
 - Use card_promote_to_session() when the conversation needs tracked implementation work
 
 ## Communicating Decisions (Critical for Readability)
@@ -2225,8 +2212,7 @@ type DecisionArgs struct {
 	Rationale           string   `json:"rationale" jsonschema:"Why this choice was made"`
 	Tags                []string `json:"tags,omitempty" jsonschema:"File paths, concepts, domains (e.g. 'src/auth.ts', 'authorization')"`
 	Origin              string   `json:"origin,omitempty" jsonschema:"'human' or 'agent' (default: agent)"`
-	Significance        string   `json:"significance" jsonschema:"'architectural', 'implementation', or 'context'"`
-	RequireConfirmation bool     `json:"require_confirmation" jsonschema:"If true, returns proposal for human review; if false, stores immediately"`
+	RequireConfirmation bool     `json:"require_confirmation" jsonschema:"If true, returns proposal for human review; if false, stores immediately. Use true for decisions, false for findings."`
 	SessionID           string   `json:"session_id,omitempty" jsonschema:"Session ID (optional - finds active session or creates ask session if not provided)"`
 	EnabledBy           string   `json:"enabled_by,omitempty" jsonschema:"Capsule ID that enabled this decision (for dependency graph)"`
 	Type                string   `json:"type,omitempty" jsonschema:"'decision' (has alternatives) or 'finding' (observation). Default: inferred from alternatives"`
@@ -2258,15 +2244,6 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 	}
 	if args.Rationale == "" {
 		return nil, nil, fmt.Errorf("rationale is required")
-	}
-	if args.Significance == "" {
-		return nil, nil, fmt.Errorf("significance is required (architectural, implementation, or context)")
-	}
-
-	// Validate significance
-	sig := capsule.Significance(strings.ToLower(args.Significance))
-	if sig != capsule.SignificanceArchitectural && sig != capsule.SignificanceImplementation && sig != capsule.SignificanceContext {
-		return nil, nil, fmt.Errorf("invalid significance: %s (must be architectural, implementation, or context)", args.Significance)
 	}
 
 	// Find session
@@ -2336,7 +2313,6 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 		Source:       origin, // Keep Source for backwards compatibility
 		Tags:         normalizedTags,
 		Type:         capsuleType,
-		Significance: sig,
 		EnabledBy:    args.EnabledBy,
 	}
 	c.ID = capsule.GenerateID(sessionID, c.Phase, args.Question)
@@ -2537,10 +2513,6 @@ func (s *Server) handleDecisionConfirm(ctx context.Context, req *mcp.CallToolReq
 				target.Tags = append(target.Tags, t)
 			}
 		}
-		// Use higher significance
-		if proposal.Capsule.Significance == capsule.SignificanceArchitectural {
-			target.Significance = capsule.SignificanceArchitectural
-		}
 
 		if err := capsule.Store(s.store, *target); err != nil {
 			return nil, nil, fmt.Errorf("failed to update capsule: %w", err)
@@ -2561,11 +2533,10 @@ func (s *Server) handleDecisionConfirm(ctx context.Context, req *mcp.CallToolReq
 
 // ContextArgs defines input for card_context.
 type ContextArgs struct {
-	Mode         string   `json:"mode" jsonschema:"'starting_task', 'before_edit', or 'reviewing_pr'"`
-	Files        []string `json:"files,omitempty" jsonschema:"File paths (required for before_edit mode)"`
-	Intent       string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting')"`
-	Significance string   `json:"significance,omitempty" jsonschema:"'architectural' (default) or 'all'"`
-	Limit        int      `json:"limit,omitempty" jsonschema:"Maximum results to return (default 15)"`
+	Mode   string   `json:"mode" jsonschema:"'starting_task', 'before_edit', or 'reviewing_pr'"`
+	Files  []string `json:"files,omitempty" jsonschema:"File paths (required for before_edit mode)"`
+	Intent string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting')"`
+	Limit  int      `json:"limit,omitempty" jsonschema:"Maximum results to return (default 15)"`
 }
 
 // PendingProposalSummary is a lightweight view of a pending proposal.
@@ -2602,8 +2573,6 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 		limit = 15
 	}
 
-	filterArchitecturalOnly := args.Significance != "all"
-
 	out := ContextResult{
 		Mode:  args.Mode,
 		Files: make(map[string]FileDecisions),
@@ -2619,25 +2588,23 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 			return allCapsules[i].Timestamp.After(allCapsules[j].Timestamp)
 		})
 
-		for i, c := range allCapsules {
-			if i >= limit {
+		count := 0
+		for _, c := range allCapsules {
+			if count >= limit {
 				break
 			}
-			if filterArchitecturalOnly && c.Significance != capsule.SignificanceArchitectural {
-				continue
-			}
 			out.RecentDecisions = append(out.RecentDecisions, CapsuleSummary{
-				ID:           c.ID,
-				SessionID:    c.SessionID,
-				Phase:        c.Phase,
-				Question:     c.Question,
-				Choice:       c.Choice,
-				Rationale:    c.Rationale,
-				Tags:         c.Tags,
-				Status:       string(c.Status),
-				Significance: string(c.Significance),
-				Recency:      formatRelativeTime(c.Timestamp),
+				ID:        c.ID,
+				SessionID: c.SessionID,
+				Phase:     c.Phase,
+				Question:  c.Question,
+				Choice:    c.Choice,
+				Rationale: c.Rationale,
+				Tags:      c.Tags,
+				Status:    string(c.Status),
+				Recency:   formatRelativeTime(c.Timestamp),
 			})
+			count++
 		}
 
 		// Get patterns
@@ -2661,7 +2628,7 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 		}
 
 		// Delegate to existing file context logic
-		fileCtxArgs := FileContextArgs{Files: args.Files, Significance: args.Significance}
+		fileCtxArgs := FileContextArgs{Files: args.Files}
 		_, fileCtxRes, err := s.handleFileContext(ctx, req, fileCtxArgs)
 		if err != nil {
 			return nil, nil, err
@@ -2684,7 +2651,6 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 					Rationale:    c.Rationale,
 					Tags:         c.Tags,
 					Status:       string(c.Status),
-					Significance: string(c.Significance),
 				})
 			}
 		}
@@ -2697,7 +2663,7 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 			return nil, nil, fmt.Errorf("files are required for reviewing_pr mode")
 		}
 
-		fileCtxArgs := FileContextArgs{Files: args.Files, Significance: args.Significance}
+		fileCtxArgs := FileContextArgs{Files: args.Files}
 		_, fileCtxRes, err := s.handleFileContext(ctx, req, fileCtxArgs)
 		if err != nil {
 			return nil, nil, err
@@ -2762,7 +2728,6 @@ type QueryArgs struct {
 	Tags               []string `json:"tags,omitempty" jsonschema:"Tags to filter by"`
 	Files              []string `json:"files,omitempty" jsonschema:"File paths to filter by"`
 	Repo               string   `json:"repo,omitempty" jsonschema:"Repository ID to scope the search"`
-	Significance       string   `json:"significance,omitempty" jsonschema:"'architectural', 'implementation', 'context', or 'all'"`
 	Status             string   `json:"status,omitempty" jsonschema:"Filter by status: 'invalidated' to see only invalidated (default: active only)"`
 	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"Include invalidated decisions (default: false)"`
 	IncludeEvolution   bool     `json:"include_evolution,omitempty" jsonschema:"Show all phases of each decision"`
@@ -2797,7 +2762,6 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest, args
 			Repo:               args.Repo,
 			IncludeEvolution:   args.IncludeEvolution,
 			Status:             args.Status,
-			Significance:       args.Significance,
 			IncludeInvalidated: args.IncludeInvalidated,
 		}
 		_, recallRes, err := s.handleRecall(ctx, req, recallArgs)
@@ -2866,7 +2830,6 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest, args
 				Rationale:    fmt.Sprintf("INVALIDATED: %s\nLEARNED: %s", c.InvalidationReason, c.Learned),
 				Tags:         c.Tags,
 				Status:       string(c.Status),
-				Significance: string(c.Significance),
 				SupersededBy: c.SupersededBy,
 				Recency:      formatRelativeTime(c.Timestamp),
 			})
@@ -3052,7 +3015,6 @@ func (s *Server) handleSessionOps(ctx context.Context, req *mcp.CallToolRequest,
 						Rationale:    c.Rationale,
 						Tags:         c.Tags,
 						Status:       string(c.Status),
-						Significance: string(c.Significance),
 					})
 				}
 				out.DuplicateGroups = append(out.DuplicateGroups, DuplicateGroup{
@@ -3076,7 +3038,6 @@ func (s *Server) handleSessionOps(ctx context.Context, req *mcp.CallToolRequest,
 					Rationale:    c.Rationale,
 					Tags:         c.Tags,
 					Status:       string(c.Status),
-					Significance: string(c.Significance),
 				})
 			}
 			out.Message = fmt.Sprintf("Session has %d decisions. Found %d potential duplicate groups.", len(capsules), len(out.DuplicateGroups))
@@ -3206,7 +3167,6 @@ func (s *Server) handleCapsuleOps(ctx context.Context, req *mcp.CallToolRequest,
 				SessionID:    graphResult.Root.SessionID,
 				Question:     graphResult.Root.Question,
 				Choice:       graphResult.Root.Choice,
-				Significance: string(graphResult.Root.Significance),
 			},
 			ASCII: graphResult.ASCII,
 		}
@@ -3229,7 +3189,6 @@ func (s *Server) handleCapsuleOps(ctx context.Context, req *mcp.CallToolRequest,
 				ID:           targetNode.ID,
 				Question:     targetNode.Question,
 				Choice:       targetNode.Choice,
-				Significance: string(targetNode.Significance),
 			}
 
 			switch edge.Relationship {
@@ -3268,7 +3227,6 @@ type SnapshotArgs struct {
 	AsOf         string   `json:"as_of" jsonschema:"Point in time: ISO8601, relative ('2 weeks ago'), or 'before:<commit>'"`
 	Files        []string `json:"files,omitempty" jsonschema:"Filter to decisions affecting these files"`
 	Tags         []string `json:"tags,omitempty" jsonschema:"Filter to decisions with these tags"`
-	Significance string   `json:"significance,omitempty" jsonschema:"'architectural', 'implementation', 'context', or 'all'"`
 	CompareToNow bool     `json:"compare_to_now,omitempty" jsonschema:"If true, show diff between snapshot and current state"`
 }
 
@@ -3284,9 +3242,8 @@ type SnapshotResult struct {
 
 // SnapshotSummary provides counts at the snapshot point.
 type SnapshotSummary struct {
-	TotalActive    int            `json:"total_active"`
-	BySignificance map[string]int `json:"by_significance"`
-	ByStatus       map[string]int `json:"by_status"`
+	TotalActive int            `json:"total_active"`
+	ByStatus    map[string]int `json:"by_status"`
 }
 
 // SnapshotDiff shows what changed between snapshot and now.
@@ -3313,19 +3270,11 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 		return nil, nil, fmt.Errorf("failed to list capsules: %w", err)
 	}
 
-	// Filter by significance if specified
-	var significanceFilter *capsule.Significance
-	if args.Significance != "" && args.Significance != "all" {
-		sig := capsule.Significance(strings.ToLower(args.Significance))
-		significanceFilter = &sig
-	}
-
 	out := SnapshotResult{
 		AsOf:         args.AsOf,
 		ResolvedTime: snapshotTime.Format(time.RFC3339),
 		Summary: SnapshotSummary{
-			BySignificance: make(map[string]int),
-			ByStatus:       make(map[string]int),
+			ByStatus: make(map[string]int),
 		},
 	}
 
@@ -3374,29 +3323,21 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 			}
 		}
 
-		// Apply significance filter
-		if significanceFilter != nil && c.Significance != *significanceFilter {
-			continue
-		}
-
 		// Capsule was active at snapshot time
 		out.ActiveDecisions = append(out.ActiveDecisions, CapsuleSummary{
-			ID:           c.ID,
-			SessionID:    c.SessionID,
-			Phase:        c.Phase,
-			Question:     c.Question,
-			Choice:       c.Choice,
-			Rationale:    c.Rationale,
-			Tags:         c.Tags,
-			Status:       string(c.Status),
-			Significance: string(c.Significance),
-			Recency:      formatRelativeTime(createdAt),
+			ID:        c.ID,
+			SessionID: c.SessionID,
+			Phase:     c.Phase,
+			Question:  c.Question,
+			Choice:    c.Choice,
+			Rationale: c.Rationale,
+			Tags:      c.Tags,
+			Status:    string(c.Status),
+			Recency:   formatRelativeTime(createdAt),
 		})
 
 		// Update summary counts
 		out.Summary.TotalActive++
-		out.Summary.BySignificance[string(c.Significance)]++
-		// Status is simply active (at that point in time, since we filtered out invalidated)
 		out.Summary.ByStatus["active"]++
 	}
 
@@ -3420,7 +3361,6 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 					Question:     c.Question,
 					Choice:       c.Choice,
 					Status:       string(c.Status),
-					Significance: string(c.Significance),
 					Recency:      formatRelativeTime(createdAt),
 				})
 			}
@@ -3433,7 +3373,6 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 					Question:     c.Question,
 					Choice:       c.Choice,
 					Status:       string(c.Status),
-					Significance: string(c.Significance),
 					Rationale:    fmt.Sprintf("Invalidated: %s", c.InvalidationReason),
 				})
 			}

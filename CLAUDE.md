@@ -33,8 +33,8 @@ CARD includes an MCP server (`internal/mcp/server.go`) that exposes tools for Cl
 
 **Recording:**
 - `card_record` — Record a decision immediately (creates ask session automatically if needed)
-- `card_decision` — Record decision with significance tier and optional human confirmation
-- `card_decision_confirm` — Confirm or supersede a proposed architectural decision
+- `card_decision` — Record decision or finding with optional human confirmation
+- `card_decision_confirm` — Confirm or supersede a proposed decision
 
 **Operations:**
 - `card_session_ops` — Session operations (summary, artifacts, history, review, dedupe)
@@ -175,7 +175,7 @@ commits:
 
 ### Decision Confirmation Flow
 
-For architectural decisions that need human review, CARD uses a two-step confirmation flow:
+For decisions that need human review, CARD uses a two-step confirmation flow:
 
 1. **Propose**: Agent calls `card_decision` with `require_confirmation: true`
    - Creates a **proposal** stored in `proposals.json` in the session directory
@@ -193,7 +193,7 @@ For architectural decisions that need human review, CARD uses a two-step confirm
 - Disk persistence allows proposals from one phase to be confirmed in the next
 - `card_context` surfaces pending proposals so agents see unconfirmed decisions
 
-**For implementation decisions** (obvious choices, pattern-following), use `require_confirmation: false` to store immediately without the two-step flow.
+**For findings** (discovered facts/constraints), use `require_confirmation: false` to store immediately without the two-step flow.
 
 ## Technology
 
