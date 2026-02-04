@@ -568,19 +568,18 @@ func CurrentPhase(status session.SessionStatus) (Phase, error) {
 	}
 }
 
-// RunConcludePhase runs the optional conclude phase on a completed session.
-// This allows developers to review and clarify decisions after session completion.
 func RunConcludePhase(s *store.Store, sess *session.Session) error {
-	if sess.Status != session.StatusCompleted {
-		return fmt.Errorf("conclude can only be run on completed sessions (current status: %s)", sess.Status)
+	if sess.Status != session.StatusCompleted && sess.Status != session.StatusConcluding {
+		return fmt.Errorf("conclude can only be run on completed or concluding sessions (current status: %s)", sess.Status)
 	}
 
 	ui.LogoWithTagline("conclude mode")
 	ui.Info(fmt.Sprintf("Running conclude phase for session: %s", sess.ID))
 
-	// Transition to concluding status
-	if err := session.Transition(s, sess.ID, session.StatusConcluding); err != nil {
-		return fmt.Errorf("failed to transition to concluding: %w", err)
+	if sess.Status != session.StatusConcluding {
+		if err := session.Transition(s, sess.ID, session.StatusConcluding); err != nil {
+			return fmt.Errorf("failed to transition to concluding: %w", err)
+		}
 	}
 
 	sess, err := session.Get(s, sess.ID)
@@ -588,14 +587,14 @@ func RunConcludePhase(s *store.Store, sess *session.Session) error {
 		return err
 	}
 
-	// Run the conclude phase (1 of 1 for this ad-hoc run)
-	if err := runSessionWidePhase(s, sess, PhaseConclude, 1); err != nil {
-		return err
-	}
+	phaseErr := runSessionWidePhase(s, sess, PhaseConclude, 1)
 
-	// Transition back to completed
 	if err := session.Transition(s, sess.ID, session.StatusCompleted); err != nil {
 		return fmt.Errorf("failed to transition back to completed: %w", err)
+	}
+
+	if phaseErr != nil && !errors.Is(phaseErr, runtime.ErrPhaseComplete) {
+		return phaseErr
 	}
 
 	ui.Info(fmt.Sprintf("Session %s conclude phase complete.", sess.ID))
