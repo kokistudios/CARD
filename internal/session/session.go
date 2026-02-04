@@ -17,19 +17,15 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// SessionStatus represents the current state of a session.
 type SessionStatus string
 
-// SessionMode indicates the type of session workflow.
 type SessionMode string
 
 const (
 	ModeStandard SessionMode = "standard" // Full 7-phase pipeline
 	ModeAsk      SessionMode = "ask"      // Conversational, no phases (can be promoted)
-	ModeResearch SessionMode = "research" // Investigate → Conclude → Record
 )
 
-// ExecutionAttemptRecord tracks a single execution attempt with outcome.
 type ExecutionAttemptRecord struct {
 	Attempt int       `yaml:"attempt"`
 	Started time.Time `yaml:"started"`
@@ -46,14 +42,12 @@ const (
 	StatusExecuting     SessionStatus = "executing"
 	StatusVerifying     SessionStatus = "verifying"
 	StatusSimplifying   SessionStatus = "simplifying"
-	StatusRecording     SessionStatus = "recording"
-	StatusConcluding    SessionStatus = "concluding" // Research mode only
-	StatusCompleted     SessionStatus = "completed"
+	StatusRecording SessionStatus = "recording"
+	StatusCompleted SessionStatus = "completed"
 	StatusPaused        SessionStatus = "paused"
 	StatusAbandoned     SessionStatus = "abandoned"
 )
 
-// Session represents a CARD session.
 type Session struct {
 	ID             string        `yaml:"id"`
 	Description    string        `yaml:"description"`
@@ -67,21 +61,17 @@ type Session struct {
 	PausedAt       *time.Time    `yaml:"paused_at,omitempty"`
 	CompletedAt    *time.Time    `yaml:"completed_at,omitempty"`
 
-	// Author attribution (PENSIEVE)
-	Author       string     `yaml:"author,omitempty"`        // From git config user.email
-	Imported     bool       `yaml:"imported,omitempty"`      // True if this session was imported
-	ImportedFrom string     `yaml:"imported_from,omitempty"` // Original author email if imported
-	ImportedAt   *time.Time `yaml:"imported_at,omitempty"`   // Timestamp of import
+	Author       string     `yaml:"author,omitempty"`
+	Imported     bool       `yaml:"imported,omitempty"`
+	ImportedFrom string     `yaml:"imported_from,omitempty"`
+	ImportedAt   *time.Time `yaml:"imported_at,omitempty"`
 
-	// Session relationships (PENSIEVE)
-	Supersedes []string `yaml:"supersedes,omitempty"` // Session IDs this invalidates
-	BuildsOn   []string `yaml:"builds_on,omitempty"`  // Session IDs this extends (non-invalidating)
+	Supersedes []string `yaml:"supersedes,omitempty"`
+	BuildsOn   []string `yaml:"builds_on,omitempty"`
 
-	// Execution tracking
 	ExecutionHistory []ExecutionAttemptRecord `yaml:"execution_history,omitempty"`
 }
 
-// AddExecutionAttempt records a new execution attempt.
 func (s *Session) AddExecutionAttempt(outcome, reason string) {
 	attempt := ExecutionAttemptRecord{
 		Attempt: len(s.ExecutionHistory) + 1,
@@ -92,7 +82,6 @@ func (s *Session) AddExecutionAttempt(outcome, reason string) {
 	s.ExecutionHistory = append(s.ExecutionHistory, attempt)
 }
 
-// UpdateLastExecutionOutcome updates the outcome of the most recent execution attempt.
 func (s *Session) UpdateLastExecutionOutcome(outcome, reason string) {
 	if len(s.ExecutionHistory) > 0 {
 		s.ExecutionHistory[len(s.ExecutionHistory)-1].Outcome = outcome
@@ -100,7 +89,6 @@ func (s *Session) UpdateLastExecutionOutcome(outcome, reason string) {
 	}
 }
 
-// getGitAuthor attempts to get the user's email from git config.
 func getGitAuthor() string {
 	cmd := exec.Command("git", "config", "user.email")
 	out, err := cmd.Output()
@@ -110,28 +98,23 @@ func getGitAuthor() string {
 	return strings.TrimSpace(string(out))
 }
 
-// validTransitions defines allowed state transitions.
-// paused and abandoned are handled separately.
 var validTransitions = map[SessionStatus][]SessionStatus{
 	StatusStarted:       {StatusInvestigating},
-	StatusInvestigating: {StatusPlanning, StatusConcluding},     // research mode can go to conclude
+	StatusInvestigating: {StatusPlanning},
 	StatusPlanning:      {StatusReviewing},
 	StatusReviewing:     {StatusApproved},
 	StatusApproved:      {StatusExecuting},
 	StatusExecuting:     {StatusVerifying},
-	StatusVerifying:     {StatusSimplifying, StatusExecuting},   // can loop back to execute
+	StatusVerifying:     {StatusSimplifying, StatusExecuting}, // can loop back to execute
 	StatusSimplifying:   {StatusRecording},
-	StatusConcluding:    {StatusRecording},                      // research mode: conclude → record
 	StatusRecording:     {StatusCompleted},
 }
 
-// terminalStatuses are states from which no forward transition is possible (except abandon).
 var terminalStatuses = map[SessionStatus]bool{
 	StatusCompleted: true,
 	StatusAbandoned: true,
 }
 
-// GenerateID creates a session ID: YYYYMMDD-<slug>-<8-char-hex>.
 func GenerateID(description string) string {
 	date := time.Now().Format("20060102")
 	slug := slugify(description)
@@ -160,7 +143,6 @@ func randomHex(n int) string {
 	return fmt.Sprintf("%x", b)[:n]
 }
 
-// CreateOption configures session creation.
 type CreateOption func(*createOptions)
 
 type createOptions struct {
@@ -168,27 +150,23 @@ type createOptions struct {
 	mode    SessionMode
 }
 
-// WithContext sets operator-provided context for the session.
 func WithContext(ctx string) CreateOption {
 	return func(o *createOptions) {
 		o.context = ctx
 	}
 }
 
-// WithMode sets the session mode (standard, ask, or research).
 func WithMode(mode SessionMode) CreateOption {
 	return func(o *createOptions) {
 		o.mode = mode
 	}
 }
 
-// Create creates a new session.
 func Create(s *store.Store, description string, repoIDs []string, opts ...CreateOption) (*Session, error) {
 	if len(repoIDs) == 0 {
 		return nil, fmt.Errorf("at least one repo is required")
 	}
 
-	// Validate repos exist
 	for _, id := range repoIDs {
 		if _, err := repo.Get(s, id); err != nil {
 			return nil, fmt.Errorf("repo not found: %s", id)
@@ -196,8 +174,6 @@ func Create(s *store.Store, description string, repoIDs []string, opts ...Create
 	}
 
 	id := GenerateID(description)
-
-	// Ensure uniqueness
 	sessDir := s.Path("sessions", id)
 	for {
 		if _, err := os.Stat(sessDir); err != nil {
@@ -207,7 +183,6 @@ func Create(s *store.Store, description string, repoIDs []string, opts ...Create
 		sessDir = s.Path("sessions", id)
 	}
 
-	// Apply options
 	var options createOptions
 	for _, o := range opts {
 		o(&options)
@@ -226,7 +201,6 @@ func Create(s *store.Store, description string, repoIDs []string, opts ...Create
 		Author:      getGitAuthor(),
 	}
 
-	// Create session directory
 	if err := os.MkdirAll(sessDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create session directory: %w", err)
 	}
@@ -238,18 +212,10 @@ func Create(s *store.Store, description string, repoIDs []string, opts ...Create
 	return sess, nil
 }
 
-// CreateAsk creates a lightweight ask session for conversational decision capture.
-// Ask sessions have no phases — they're containers for decisions made during card ask.
-// Use PromoteToStandard to convert an ask session into a standard session when implementation is needed.
 func CreateAsk(s *store.Store, description string, repoIDs []string) (*Session, error) {
 	return Create(s, description, repoIDs, WithMode(ModeAsk))
 }
 
-// PromoteToStandard converts an ask session into a standard session for implementation work.
-// startPhase determines where the session begins: "investigate", "plan", or "execute".
-// - "investigate": Full pipeline, ask context seeds investigation
-// - "plan": Skip investigation, start at planning (most common — investigation happened in ask)
-// - "execute": Skip to execution (rare, for trivial changes)
 func PromoteToStandard(s *store.Store, sessionID string, startPhase string) error {
 	sess, err := Get(s, sessionID)
 	if err != nil {
@@ -277,7 +243,6 @@ func PromoteToStandard(s *store.Store, sessionID string, startPhase string) erro
 	return save(s, sess)
 }
 
-// UpdateDescription updates a session's description.
 func UpdateDescription(s *store.Store, sessionID string, description string) error {
 	sess, err := Get(s, sessionID)
 	if err != nil {
@@ -288,7 +253,6 @@ func UpdateDescription(s *store.Store, sessionID string, description string) err
 	return save(s, sess)
 }
 
-// Transition moves a session to a new status.
 func Transition(s *store.Store, id string, newStatus SessionStatus) error {
 	sess, err := Get(s, id)
 	if err != nil {
@@ -329,7 +293,6 @@ func Transition(s *store.Store, id string, newStatus SessionStatus) error {
 	return save(s, sess)
 }
 
-// Pause pauses a session.
 func Pause(s *store.Store, id string) error {
 	sess, err := Get(s, id)
 	if err != nil {
@@ -374,7 +337,6 @@ func Resume(s *store.Store, id string) error {
 	return nil
 }
 
-// Abandon marks a session as abandoned.
 func Abandon(s *store.Store, id string) error {
 	sess, err := Get(s, id)
 	if err != nil {
@@ -389,12 +351,10 @@ func Abandon(s *store.Store, id string) error {
 	return save(s, sess)
 }
 
-// Complete marks a session as completed (validates it's in recording state).
 func Complete(s *store.Store, id string) error {
 	return Transition(s, id, StatusCompleted)
 }
 
-// AddRepos appends new repo IDs to a session, deduplicating against existing repos.
 func AddRepos(s *store.Store, id string, newRepoIDs []string) error {
 	sess, err := Get(s, id)
 	if err != nil {
@@ -424,7 +384,6 @@ func Update(s *store.Store, sess *Session) error {
 	return save(s, sess)
 }
 
-// Get returns a single session by ID.
 func Get(s *store.Store, id string) (*Session, error) {
 	p := s.Path("sessions", id, "session.yaml")
 	data, err := os.ReadFile(p)
@@ -438,7 +397,6 @@ func Get(s *store.Store, id string) (*Session, error) {
 	return &sess, nil
 }
 
-// List returns all sessions.
 func List(s *store.Store) ([]Session, error) {
 	sessionsDir := s.Path("sessions")
 	entries, err := os.ReadDir(sessionsDir)
@@ -460,7 +418,6 @@ func List(s *store.Store) ([]Session, error) {
 	return sessions, nil
 }
 
-// GetActive returns non-completed, non-abandoned sessions.
 func GetActive(s *store.Store) ([]Session, error) {
 	all, err := List(s)
 	if err != nil {
@@ -484,12 +441,9 @@ func save(s *store.Store, sess *Session) error {
 	if err := os.WriteFile(p, data, 0644); err != nil {
 		return fmt.Errorf("failed to write session file: %w", err)
 	}
-	// Also write the session summary markdown for Obsidian
 	return writeSummaryMd(s, sess)
 }
 
-// writeSummaryMd generates a session summary markdown file with
-// repo links and status tags for Obsidian graph visualization.
 func writeSummaryMd(s *store.Store, sess *Session) error {
 	var buf bytes.Buffer
 	buf.WriteString("---\n")
@@ -502,11 +456,9 @@ func writeSummaryMd(s *store.Store, sess *Session) error {
 
 	buf.WriteString(fmt.Sprintf("# %s\n\n", sess.Description))
 
-	// Status tag for Obsidian graph
 	statusTag := strings.ToUpper(string(sess.Status))
 	buf.WriteString(fmt.Sprintf("#%s\n\n", statusTag))
 
-	// Repo links
 	if len(sess.Repos) > 0 {
 		buf.WriteString("## Repos\n\n")
 		for _, repoID := range sess.Repos {
@@ -542,14 +494,12 @@ func writeSummaryMd(s *store.Store, sess *Session) error {
 
 	var foundArtifacts []string
 
-	// Add persistent artifacts
 	for _, af := range persistentArtifacts {
 		if _, err := os.Stat(filepath.Join(sessionDir, af)); err == nil {
 			foundArtifacts = append(foundArtifacts, strings.TrimSuffix(af, ".md"))
 		}
 	}
 
-	// Add intermediate artifacts only for non-completed sessions
 	if sess.Status != StatusCompleted && sess.Status != StatusAbandoned {
 		for _, af := range intermediateArtifacts {
 			if _, err := os.Stat(filepath.Join(sessionDir, af)); err == nil {
@@ -578,14 +528,12 @@ func writeSummaryMd(s *store.Store, sess *Session) error {
 		buf.WriteString("\n")
 	}
 
-	// Decisions
 	capsulesPath := s.Path("sessions", sess.ID, "capsules.md")
 	if _, err := os.Stat(capsulesPath); err == nil {
 		buf.WriteString("## Decisions\n\n")
 		buf.WriteString("- [[capsules]]\n\n")
 	}
 
-	// Timeline
 	buf.WriteString("## Timeline\n\n")
 	buf.WriteString(fmt.Sprintf("- **Created:** %s\n", sess.CreatedAt.Format("2006-01-02 15:04")))
 	buf.WriteString(fmt.Sprintf("- **Updated:** %s\n", sess.UpdatedAt.Format("2006-01-02 15:04")))
@@ -600,8 +548,7 @@ func writeSummaryMd(s *store.Store, sess *Session) error {
 	return os.WriteFile(p, buf.Bytes(), 0644)
 }
 
-// RegenerateSummary regenerates the session summary markdown file.
-// Call this after cleaning up ephemeral artifacts to update the Artifacts section.
+// Call after cleaning up ephemeral artifacts to update the Artifacts section.
 func RegenerateSummary(s *store.Store, sessionID string) error {
 	sess, err := Get(s, sessionID)
 	if err != nil {

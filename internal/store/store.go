@@ -8,32 +8,27 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ClaudeConfig holds Claude Code CLI settings.
 type ClaudeConfig struct {
 	Path         string   `yaml:"path"`
 	DefaultFlags []string `yaml:"default_flags,omitempty"`
 }
 
-// RuntimeConfig holds AI runtime settings.
 type RuntimeConfig struct {
 	Type string `yaml:"type"`
 	Path string `yaml:"path,omitempty"`
 }
 
-// SessionConfig holds session behavior settings.
 type SessionConfig struct {
 	AutoContinueSimplify bool `yaml:"auto_continue_simplify"`
 	AutoContinueRecord   bool `yaml:"auto_continue_record"`
 }
 
-// RecallConfig holds recall engine settings.
 type RecallConfig struct {
 	MaxContextBlocks int `yaml:"max_context_blocks"`
 	MaxContextChars  int `yaml:"max_context_chars"`
 	MaxContextTokens int `yaml:"max_context_tokens"`
 }
 
-// Config holds CARD configuration.
 type Config struct {
 	Version string        `yaml:"version"`
 	Runtime RuntimeConfig `yaml:"runtime,omitempty"`
@@ -42,7 +37,6 @@ type Config struct {
 	Recall  RecallConfig  `yaml:"recall,omitempty"`
 }
 
-// DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
 		Version: "1",
@@ -64,19 +58,16 @@ func DefaultConfig() Config {
 	}
 }
 
-// Store represents a loaded CARD_HOME.
 type Store struct {
 	Home   string
 	Config Config
 }
 
-// Issue represents a health check finding.
 type Issue struct {
 	Severity string // "warning" or "error"
 	Message  string
 }
 
-// Home returns the CARD_HOME path, respecting the CARD_HOME env var.
 func Home() string {
 	if h := os.Getenv("CARD_HOME"); h != "" {
 		return h
@@ -88,7 +79,6 @@ func Home() string {
 	return filepath.Join(home, ".card")
 }
 
-// Init creates the CARD_HOME directory structure.
 func Init(home string, force bool) error {
 	if _, err := os.Stat(home); err == nil && !force {
 		return fmt.Errorf("CARD_HOME already exists at %s (use --force to reinitialize)", home)
@@ -117,8 +107,6 @@ func Init(home string, force bool) error {
 	return nil
 }
 
-// Load reads and validates an existing CARD_HOME.
-// Missing config fields are filled from defaults.
 func Load(home string) (*Store, error) {
 	cfgPath := filepath.Join(home, "config.yaml")
 	data, err := os.ReadFile(cfgPath)
@@ -138,7 +126,6 @@ func Load(home string) (*Store, error) {
 	return &Store{Home: home, Config: cfg}, nil
 }
 
-// SaveConfig writes the current config to config.yaml.
 func (s *Store) SaveConfig() error {
 	data, err := yaml.Marshal(s.Config)
 	if err != nil {
@@ -151,7 +138,6 @@ func (s *Store) SaveConfig() error {
 	return nil
 }
 
-// SetConfigValue sets a config value by dot-path key (e.g. "claude.path").
 func (s *Store) SetConfigValue(key, value string) error {
 	switch key {
 	case "runtime.type":
@@ -191,13 +177,11 @@ func (s *Store) SetConfigValue(key, value string) error {
 	return s.SaveConfig()
 }
 
-// Path resolves a path within CARD_HOME.
 func (s *Store) Path(parts ...string) string {
 	all := append([]string{s.Home}, parts...)
 	return filepath.Join(all...)
 }
 
-// CheckHealth verifies CARD_HOME structure integrity.
 func CheckHealth(home string) []Issue {
 	var issues []Issue
 
@@ -225,7 +209,6 @@ func CheckHealth(home string) []Issue {
 	return issues
 }
 
-// CheckSessionIntegrity validates all sessions in CARD_HOME.
 func CheckSessionIntegrity(home string) []Issue {
 	var issues []Issue
 	sessionsDir := filepath.Join(home, "sessions")
@@ -234,7 +217,6 @@ func CheckSessionIntegrity(home string) []Issue {
 		return issues
 	}
 
-	// Build set of registered repo IDs by parsing repo files
 	registeredRepos := make(map[string]bool)
 	reposDir := filepath.Join(home, "repos")
 	repoFiles, _ := os.ReadDir(reposDir)
@@ -246,7 +228,6 @@ func CheckSessionIntegrity(home string) []Issue {
 		if err != nil {
 			continue
 		}
-		// Parse frontmatter to get ID
 		var raw map[string]interface{}
 		content := string(data)
 		if len(content) > 4 && content[:4] == "---\n" {
@@ -277,7 +258,6 @@ func CheckSessionIntegrity(home string) []Issue {
 			continue
 		}
 
-		// Check referenced repos exist
 		if repos, ok := raw["repos"].([]interface{}); ok {
 			for _, r := range repos {
 				repoID, _ := r.(string)
@@ -294,7 +274,6 @@ func CheckSessionIntegrity(home string) []Issue {
 	return issues
 }
 
-// findFrontmatterEnd finds the position of the closing "---" in frontmatter content.
 func findFrontmatterEnd(content string) int {
 	for i := 0; i < len(content)-3; i++ {
 		if content[i] == '-' && content[i+1] == '-' && content[i+2] == '-' {
@@ -306,7 +285,6 @@ func findFrontmatterEnd(content string) int {
 	return -1
 }
 
-// CheckCapsuleIntegrity validates all capsules reference valid sessions.
 func CheckCapsuleIntegrity(home string) []Issue {
 	var issues []Issue
 	sessionsDir := filepath.Join(home, "sessions")
@@ -344,14 +322,12 @@ func CheckCapsuleIntegrity(home string) []Issue {
 					issues = append(issues, Issue{"error", fmt.Sprintf("capsule %s: invalid YAML", capFile)})
 				}
 			}
-			// .md files are valid by existence (frontmatter validated on load)
 		}
 	}
 
 	return issues
 }
 
-// FixIssues attempts to repair simple issues in CARD_HOME.
 func FixIssues(home string) []string {
 	var fixed []string
 
@@ -376,15 +352,12 @@ func FixIssues(home string) []string {
 	return fixed
 }
 
-// EphemeralArtifact represents a stale ephemeral artifact found in a completed session.
 type EphemeralArtifact struct {
 	SessionID string
 	Filename  string
 	Path      string
 }
 
-// ephemeralArtifactPatterns defines files that should be cleaned up after session completion.
-// These are verbose working documents; the value is extracted to capsules and milestone_ledger.
 var ephemeralArtifactPatterns = []string{
 	"investigation_summary.md",
 	"implementation_guide.md",
@@ -393,9 +366,6 @@ var ephemeralArtifactPatterns = []string{
 	"research_conclusions.md",
 }
 
-// CheckEphemeralArtifacts finds stale ephemeral artifacts in completed sessions.
-// These should have been cleaned up but may exist from sessions completed before
-// the ephemeral artifact cleanup was implemented.
 func CheckEphemeralArtifacts(home string) []EphemeralArtifact {
 	var stale []EphemeralArtifact
 	sessionsDir := filepath.Join(home, "sessions")
@@ -427,7 +397,6 @@ func CheckEphemeralArtifacts(home string) []EphemeralArtifact {
 			continue
 		}
 
-		// Check for ephemeral artifacts in completed session
 		for _, pattern := range ephemeralArtifactPatterns {
 			path := filepath.Join(sessionDir, pattern)
 			if _, err := os.Stat(path); err == nil {
@@ -439,7 +408,6 @@ func CheckEphemeralArtifacts(home string) []EphemeralArtifact {
 			}
 		}
 
-		// Check for versioned artifacts (execution_log_v*.md, verification_notes_v*.md)
 		files, err := os.ReadDir(sessionDir)
 		if err != nil {
 			continue
@@ -460,14 +428,11 @@ func CheckEphemeralArtifacts(home string) []EphemeralArtifact {
 	return stale
 }
 
-// CleanupResult contains the results of cleaning ephemeral artifacts.
 type CleanupResult struct {
 	Messages           []string // Human-readable messages for each cleaned file
 	AffectedSessionIDs []string // Unique session IDs that had artifacts removed
 }
 
-// CleanEphemeralArtifacts removes stale ephemeral artifacts from completed sessions.
-// Returns cleanup results including affected session IDs for summary regeneration.
 func CleanEphemeralArtifacts(home string) CleanupResult {
 	result := CleanupResult{
 		Messages:           []string{},

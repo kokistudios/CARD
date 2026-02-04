@@ -2,7 +2,6 @@ package runtime
 
 import "strings"
 
-// MapToolsToSandbox maps CARD tool restrictions to Codex sandbox levels.
 func MapToolsToSandbox(tools []string) string {
 	if tools == nil {
 		return "danger-full-access"

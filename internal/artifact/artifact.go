@@ -13,7 +13,6 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// ArtifactMeta contains the YAML frontmatter metadata for an artifact.
 type ArtifactMeta struct {
 	Session   string    `yaml:"session"`
 	Repos     []string  `yaml:"repos,omitempty"`
@@ -22,7 +21,6 @@ type ArtifactMeta struct {
 	Status    string    `yaml:"status"` // draft, final
 }
 
-// Artifact represents a parsed markdown artifact with YAML frontmatter.
 type Artifact struct {
 	Frontmatter ArtifactMeta
 	Body        string
@@ -30,22 +28,18 @@ type Artifact struct {
 	FilePath    string
 }
 
-// Parse splits a markdown document into YAML frontmatter and body.
-// Frontmatter is delimited by --- lines at the start of the document.
 func Parse(raw []byte) (*Artifact, error) {
 	content := string(raw)
 	trimmed := strings.TrimSpace(content)
 
 	if !strings.HasPrefix(trimmed, "---") {
-		// No frontmatter — treat entire content as body with empty metadata
 		return &Artifact{
 			Body:       content,
 			RawContent: content,
 		}, nil
 	}
 
-	// Find the closing ---
-	rest := trimmed[3:] // skip opening ---
+	rest := trimmed[3:]
 	rest = strings.TrimLeft(rest, " \t")
 	if len(rest) > 0 && rest[0] == '\n' {
 		rest = rest[1:]
@@ -59,8 +53,7 @@ func Parse(raw []byte) (*Artifact, error) {
 	}
 
 	fmRaw := rest[:endIdx]
-	body := rest[endIdx+4:] // skip \n---
-	// Trim leading newline from body
+	body := rest[endIdx+4:]
 	body = strings.TrimLeft(body, "\r\n")
 
 	var meta ArtifactMeta
@@ -75,7 +68,6 @@ func Parse(raw []byte) (*Artifact, error) {
 	}, nil
 }
 
-// Validate checks that an artifact meets phase-specific requirements.
 func Validate(a *Artifact, phase string) error {
 	if phase == "simplify" {
 		return nil
@@ -104,10 +96,8 @@ func Validate(a *Artifact, phase string) error {
 			return fmt.Errorf("verification artifact missing expected sections")
 		}
 	case "simplify":
-		// Simplify produces no artifact — always valid
 		return nil
 	case "conclude":
-		// Research mode conclusions artifact
 		if !strings.Contains(body, "## findings") && !strings.Contains(body, "## conclusions") && !strings.Contains(body, "## recommendations") {
 			return fmt.Errorf("conclude artifact missing expected sections (findings, conclusions, or recommendations)")
 		}
@@ -122,7 +112,6 @@ func Validate(a *Artifact, phase string) error {
 	return nil
 }
 
-// PhaseFilename returns the conventional filename for a phase's artifact.
 func PhaseFilename(phase string) string {
 	switch phase {
 	case "investigate":
@@ -130,13 +119,11 @@ func PhaseFilename(phase string) string {
 	case "plan":
 		return "implementation_guide.md"
 	case "review":
-		return "implementation_guide.md" // Review overwrites the plan with amendments
+		return "implementation_guide.md"
 	case "execute":
 		return "execution_log.md"
 	case "verify":
 		return "verification_notes.md"
-	case "conclude":
-		return "research_conclusions.md" // Research mode only
 	case "record":
 		return "milestone_ledger.md"
 	default:
@@ -144,7 +131,6 @@ func PhaseFilename(phase string) string {
 	}
 }
 
-// Store writes an artifact to its canonical location in CARD_HOME.
 func Store(st *store.Store, sessionID, repoID string, a *Artifact) (string, error) {
 	dir := st.Path("sessions", sessionID, "changes", repoID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -154,7 +140,6 @@ func Store(st *store.Store, sessionID, repoID string, a *Artifact) (string, erro
 	filename := PhaseFilename(a.Frontmatter.Phase)
 	destPath := filepath.Join(dir, filename)
 
-	// Build the file content with frontmatter
 	var buf bytes.Buffer
 	buf.WriteString("---\n")
 	fm, err := yaml.Marshal(a.Frontmatter)
@@ -173,8 +158,6 @@ func Store(st *store.Store, sessionID, repoID string, a *Artifact) (string, erro
 	return destPath, nil
 }
 
-// StoreSessionLevel writes an artifact to the session directory (not per-repo).
-// Used for session-wide phases like investigation.
 func StoreSessionLevel(st *store.Store, sessionID string, a *Artifact) (string, error) {
 	dir := st.Path("sessions", sessionID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -202,7 +185,6 @@ func StoreSessionLevel(st *store.Store, sessionID string, a *Artifact) (string, 
 	return destPath, nil
 }
 
-// Load reads an artifact from a file path.
 func Load(path string) (*Artifact, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"github.com/kokistudios/card/internal/session"
 )
 
-// Phase represents a named phase in the CARD pipeline.
 type Phase string
 
 const (
@@ -15,51 +14,33 @@ const (
 	PhaseVerify      Phase = "verify"
 	PhaseSimplify    Phase = "simplify"
 	PhaseRecord      Phase = "record"
-	PhaseConclude    Phase = "conclude" // Research mode only
 )
 
-// Sequence returns the ordered list of phases for standard sessions.
 func Sequence() []Phase {
 	return []Phase{PhaseInvestigate, PhasePlan, PhaseReview, PhaseExecute, PhaseVerify, PhaseSimplify, PhaseRecord}
 }
 
-// AskSequence returns the phases for ask sessions.
-// Ask sessions are conversational and have no phases — decisions are recorded directly.
-// Use session.PromoteToStandard() to convert an ask session to a standard session.
 func AskSequence() []Phase {
 	return []Phase{} // No phases — ask is conversational
 }
 
-// ResearchSequence returns the phases for research sessions.
-// No code execution - just investigate, conclude, and record.
-func ResearchSequence() []Phase {
-	return []Phase{PhaseInvestigate, PhaseConclude, PhaseRecord}
-}
-
-// SequenceFor returns the appropriate phase sequence for a session mode.
 func SequenceFor(mode session.SessionMode) []Phase {
 	switch mode {
 	case session.ModeAsk:
 		return AskSequence()
-	case session.ModeResearch:
-		return ResearchSequence()
 	default:
 		return Sequence()
 	}
 }
 
-// NeedsApproval returns true if the developer must approve before proceeding past this phase.
-// Only investigate needs a simple y/n gate. Review and verify handle their own interactive gates.
 func NeedsApproval(p Phase) bool {
 	return p == PhaseInvestigate
 }
 
-// ProducesArtifact returns true if this phase produces an artifact file.
 func ProducesArtifact(p Phase) bool {
 	return p != PhaseSimplify
 }
 
-// SessionStatus maps a phase to the session status when that phase is active.
 func SessionStatus(p Phase) session.SessionStatus {
 	switch p {
 	case PhaseInvestigate:
@@ -76,8 +57,6 @@ func SessionStatus(p Phase) session.SessionStatus {
 		return session.StatusSimplifying
 	case PhaseRecord:
 		return session.StatusRecording
-	case PhaseConclude:
-		return session.StatusConcluding
 	default:
 		return session.StatusStarted
 	}

@@ -18,7 +18,6 @@ const (
 	claudeSignalGracePeriod  = 2 * time.Second
 )
 
-// ClaudeRuntime implements the Runtime interface for Claude Code.
 type ClaudeRuntime struct {
 	Path string
 }
@@ -27,12 +26,10 @@ func (c *ClaudeRuntime) Name() string {
 	return "claude"
 }
 
-// Available checks if the Claude CLI exists at the configured path.
 func (c *ClaudeRuntime) Available() error {
 	return claudeAvailableAt(c.pathOrDefault())
 }
 
-// Invoke launches Claude Code with the given options.
 func (c *ClaudeRuntime) Invoke(opts InvokeOptions) error {
 	claudePath := c.pathOrDefault()
 	if err := claudeAvailableAt(claudePath); err != nil {

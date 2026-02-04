@@ -14,7 +14,6 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// Change tracks per-repo state within a session.
 type Change struct {
 	SessionID   string    `yaml:"session_id"`
 	RepoID      string    `yaml:"repo_id"`
@@ -26,7 +25,6 @@ type Change struct {
 	UpdatedAt   time.Time `yaml:"updated_at"`
 }
 
-// Create creates a change record for a repo in a session.
 func Create(s *store.Store, sessionID, repoID string) (*Change, error) {
 	// Look up repo to get local path for base commit
 	r, err := repo.Get(s, repoID)
@@ -59,7 +57,6 @@ func Create(s *store.Store, sessionID, repoID string) (*Change, error) {
 	return c, nil
 }
 
-// Get returns a change record.
 func Get(s *store.Store, sessionID, repoID string) (*Change, error) {
 	p := filepath.Join(changeDir(s, sessionID, repoID), "change.yaml")
 	data, err := os.ReadFile(p)
@@ -73,7 +70,6 @@ func Get(s *store.Store, sessionID, repoID string) (*Change, error) {
 	return &c, nil
 }
 
-// ListForSession returns all changes for a session.
 func ListForSession(s *store.Store, sessionID string) ([]Change, error) {
 	changesDir := s.Path("sessions", sessionID, "changes")
 	entries, err := os.ReadDir(changesDir)
@@ -114,12 +110,10 @@ func save(s *store.Store, c *Change) error {
 	return nil
 }
 
-// Save persists a change record to disk.
 func Save(s *store.Store, c *Change) error {
 	return save(s, c)
 }
 
-// GetHeadCommit returns the HEAD commit SHA for a repo at the given path.
 func GetHeadCommit(repoPath string) string {
 	return getHeadCommit(repoPath)
 }

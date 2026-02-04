@@ -67,7 +67,7 @@ Everything else in CARD exists to produce, store, or query decisions.
 
 ### 6. Push, Don't Pull
 
-The dream: CARD tells you what you need to know **before** you make mistakes. Not "search for context if you remember to." Not "read the docs if they exist."
+CARD tells you what you need to know **before** you make mistakes. Not "search for context if you remember to." Not "read the docs if they exist."
 
 When you touch `auth.ts`, CARD surfaces the 3 verified decisions about authentication without you asking. When you propose a change that conflicts with a prior decision, CARD flags it before you implement.
 

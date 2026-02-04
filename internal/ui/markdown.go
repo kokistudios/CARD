@@ -7,7 +7,6 @@ import (
 	"github.com/charmbracelet/glamour"
 )
 
-// RenderMarkdown renders markdown text with terminal styling and prints it to stderr.
 func RenderMarkdown(md string) {
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),

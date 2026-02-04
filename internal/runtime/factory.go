@@ -2,7 +2,6 @@ package runtime
 
 import "fmt"
 
-// New returns a runtime by type.
 func New(runtimeType, path string) (Runtime, error) {
 	switch runtimeType {
 	case "", "claude":

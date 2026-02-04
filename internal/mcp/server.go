@@ -21,14 +21,12 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// Server wraps the MCP server with CARD's store.
 type Server struct {
 	store     *store.Store
 	server    *mcp.Server
 	proposals *ProposalStore // Stores pending decision proposals awaiting confirmation
 }
 
-// NewServer creates a new CARD MCP server.
 func NewServer(st *store.Store, version string) *Server {
 	s := &Server{
 		store:     st,
@@ -43,33 +41,27 @@ func NewServer(st *store.Store, version string) *Server {
 	s.server = mcp.NewServer(impl, nil)
 	s.registerTools()
 
-	// Start proposal cleanup routine (clean expired proposals every 5 minutes)
 	s.proposals.StartCleanupRoutine(5 * time.Minute)
 
 	return s
 }
 
-// Run starts the MCP server on stdio.
 func (s *Server) Run(ctx context.Context) error {
 	return s.server.Run(ctx, &mcp.StdioTransport{})
 }
 
-// detectCurrentRepo attempts to find a registered repo from the current working directory.
-// Returns the repo ID if found, empty string otherwise.
 func (s *Server) detectCurrentRepo() string {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
 
-	// List all registered repos and check if cwd is within any of them
 	repos, err := repo.List(s.store)
 	if err != nil {
 		return ""
 	}
 
 	for _, r := range repos {
-		// Check if cwd is the repo path or a subdirectory
 		if strings.HasPrefix(cwd, r.LocalPath) {
 			return r.ID
 		}
@@ -78,9 +70,7 @@ func (s *Server) detectCurrentRepo() string {
 	return ""
 }
 
-// registerTools adds all CARD tools to the MCP server.
 func (s *Server) registerTools() {
-	// card_promote_to_session - promote ask session to standard session for implementation
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_promote_to_session",
 		Description: "Promote an ask session to a full CARD session for implementation work. " +
@@ -91,7 +81,6 @@ func (s *Server) registerTools() {
 			"Returns next steps for the user to run the session.",
 	}, s.handlePromoteToSession)
 
-	// card_record - record a decision or finding mid-phase
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_record",
 		Description: "Record a decision or finding immediately without waiting for artifact extraction. " +
@@ -100,7 +89,6 @@ func (s *Server) registerTools() {
 			"If no session_id provided, finds the most recent active session or creates an ask session automatically.",
 	}, s.handleRecord)
 
-	// card_agent_guidance - get proactive usage instructions
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_agent_guidance",
 		Description: "Get guidance on proactive CARD usage. Call this once at the start of a session to " +
@@ -108,7 +96,6 @@ func (s *Server) registerTools() {
 			"and capturing decisions.",
 	}, s.handleAgentGuidance)
 
-	// card_write_artifact - deterministically write phase artifacts
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_write_artifact",
 		Description: "Write a CARD phase artifact to the correct location. USE THIS instead of the Write tool " +
@@ -117,7 +104,6 @@ func (s *Server) registerTools() {
 			"Content MUST include valid YAML frontmatter with session, phase, timestamp, and status fields.",
 	}, s.handleWriteArtifact)
 
-	// card_decision - decision recording with threshold guidance
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_decision",
 		Description: "Record a decision or finding with optional human confirmation.\n\n" +
@@ -142,7 +128,6 @@ func (s *Server) registerTools() {
 			"If no session_id provided, finds the most recent active session or creates an ask session automatically.",
 	}, s.handleDecision)
 
-	// card_decision_confirm - confirm a proposed architectural decision
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_decision_confirm",
 		Description: "Confirm a proposed decision after human approval. " +
@@ -156,7 +141,6 @@ func (s *Server) registerTools() {
 			"invalidation_reason, and optionally learned (insight gained).",
 	}, s.handleDecisionConfirm)
 
-	// card_context - unified pre-work context
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_context",
 		Description: "Get unified context before working on files.\n\n" +
@@ -167,7 +151,6 @@ func (s *Server) registerTools() {
 			"PROACTIVE USE: Call this BEFORE any implementation work. Don't wait for users to ask.",
 	}, s.handleContext)
 
-	// card_query - unified search
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_query",
 		Description: "Unified search across CARD's memory.\n\n" +
@@ -181,7 +164,6 @@ func (s *Server) registerTools() {
 			"SMART DEFAULT: Call with target='decisions' and no params for the 15 most recent decisions.",
 	}, s.handleQuery)
 
-	// card_session_ops - unified session operations
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_session_ops",
 		Description: "Unified session operations.\n\n" +
@@ -193,7 +175,6 @@ func (s *Server) registerTools() {
 			"- 'dedupe': Merge semantic duplicates (use dedupe_dry_run for preview)",
 	}, s.handleSessionOps)
 
-	// card_capsule_ops - unified capsule operations
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_capsule_ops",
 		Description: "Unified capsule operations.\n\n" +
@@ -205,7 +186,6 @@ func (s *Server) registerTools() {
 			"For invalidate: You MUST (1) review with operation='show', (2) explain why, (3) get permission.",
 	}, s.handleCapsuleOps)
 
-	// card_snapshot - temporal queries for point-in-time decision state
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_snapshot",
 		Description: "Query CARD's decision state at a point in time. Use this for archaeological queries like " +
@@ -217,7 +197,6 @@ func (s *Server) registerTools() {
 			"Set compare_to_now=true to see what changed since that point.",
 	}, s.handleSnapshot)
 
-	// card_phase_complete - signal that a session phase is complete
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name: "card_phase_complete",
 		Description: "Signal that the current phase is complete. Call AFTER writing the artifact via " +
@@ -230,7 +209,6 @@ func (s *Server) registerTools() {
 	}, s.handlePhaseComplete)
 }
 
-// RecallArgs defines the input for card_recall.
 type RecallArgs struct {
 	Files              []string `json:"files,omitempty" jsonschema:"File paths to search for related decisions (e.g. src/auth.ts)"`
 	Tags               []string `json:"tags,omitempty" jsonschema:"Tags or keywords to search (e.g. authentication, database, api)"`
@@ -242,14 +220,12 @@ type RecallArgs struct {
 	IncludeInvalidated bool     `json:"include_invalidated,omitempty" jsonschema:"If true, include invalidated decisions (default: false - excludes invalidated)"`
 }
 
-// RecallResult is the output of card_recall.
 type RecallResult struct {
 	Capsules []CapsuleSummary `json:"capsules"`
 	Sessions []SessionSummary `json:"sessions"`
 	Message  string           `json:"message,omitempty"`
 }
 
-// CapsuleSummary is a lightweight view of a capsule for recall results.
 type CapsuleSummary struct {
 	ID           string   `json:"id"`
 	SessionID    string   `json:"session_id"`
@@ -266,7 +242,6 @@ type CapsuleSummary struct {
 	PensieveLink string   `json:"pensieve_link,omitempty"` // Path to milestone_ledger
 }
 
-// SessionSummary is a lightweight view of a session.
 type SessionSummary struct {
 	ID          string `json:"id"`
 	Description string `json:"description"`
@@ -275,8 +250,6 @@ type SessionSummary struct {
 }
 
 func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, args RecallArgs) (*mcp.CallToolResult, any, error) {
-	// If explicitly requesting invalidated status, auto-enable IncludeInvalidated
-	// Must happen BEFORE building the query
 	if args.Status == "invalidated" {
 		args.IncludeInvalidated = true
 	}
@@ -290,9 +263,7 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		IncludeInvalidated: args.IncludeInvalidated,
 	}
 
-	// If repo specified, get the local path for git correlation
 	if q.RepoID != "" {
-		// Note: we don't have direct repo access here, but recall.Query handles missing RepoPath gracefully
 	}
 
 	result, err := recall.Query(s.store, q)
@@ -300,7 +271,6 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		return nil, nil, fmt.Errorf("recall query failed: %w", err)
 	}
 
-	// Convert to our output format
 	out := RecallResult{}
 
 	if len(result.Capsules) == 0 && len(result.Sessions) == 0 {
@@ -308,7 +278,6 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		return nil, out, nil
 	}
 
-	// Filter by status if specified (for post-query filtering)
 	var statusFilter *capsule.CapsuleStatus
 	if args.Status != "" {
 		status := capsule.CapsuleStatus(args.Status)
@@ -318,12 +287,10 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 	isCompact := args.Format == "compact"
 
 	for _, sc := range result.Capsules {
-		// Apply status filter
 		if statusFilter != nil && sc.Status != *statusFilter {
 			continue
 		}
 
-		// Exclude invalidated unless explicitly requested
 		if !args.IncludeInvalidated && sc.Status == capsule.StatusInvalidated {
 			continue
 		}
@@ -337,11 +304,10 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 			Status:       string(sc.Status),
 			Type:         string(sc.Type),
 			SupersededBy: sc.SupersededBy,
-			Recency:      formatRelativeTime(sc.Timestamp),
+			Recency:      formatRelativeTime(sc.CreatedAt),
 			PensieveLink: fmt.Sprintf("~/.card/sessions/%s/milestone_ledger.md", sc.SessionID),
 		}
 
-		// Include full details unless compact mode
 		if !isCompact {
 			summary.Rationale = sc.Rationale
 			summary.Tags = sc.Tags
@@ -360,7 +326,6 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 		})
 	}
 
-	// Add deprecation notice
 	if len(out.Capsules) > 0 {
 		out.Message = "DEPRECATED: card_recall will be removed in v2.0. Use card_query with target='decisions' instead. Tip: If you discover something that needs fixing, use card_promote_to_session to create a recorded session."
 	} else if out.Message == "" {
@@ -372,12 +337,10 @@ func (s *Server) handleRecall(ctx context.Context, req *mcp.CallToolRequest, arg
 	return nil, out, nil
 }
 
-// CapsuleShowArgs defines input for card_capsule_show.
 type CapsuleShowArgs struct {
 	ID string `json:"id" jsonschema:"The capsule ID to retrieve (e.g. 20260128-auth-fix-inv-abc123)"`
 }
 
-// CapsuleDetail is the full capsule output.
 type CapsuleDetail struct {
 	ID           string   `json:"id"`
 	SessionID    string   `json:"session_id"`
@@ -413,26 +376,23 @@ func (s *Server) handleCapsuleShow(ctx context.Context, req *mcp.CallToolRequest
 		Rationale:    c.Rationale,
 		Tags:         c.Tags,
 		Commits:      c.Commits,
-		Timestamp:    c.Timestamp.Format("2006-01-02 15:04:05"),
+		Timestamp:    c.CreatedAt.Format("2006-01-02 15:04:05"),
 	}
 
 	return nil, out, nil
 }
 
-// SessionsArgs defines input for card_sessions.
 type SessionsArgs struct {
 	Repo   string `json:"repo,omitempty" jsonschema:"Repository ID to filter by (optional)"`
 	Status string `json:"status,omitempty" jsonschema:"Filter by status: completed, started, paused, abandoned (optional)"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum number of sessions to return (default 20)"`
 }
 
-// SessionsResult is the output of card_sessions.
 type SessionsResult struct {
 	Sessions []SessionDetail `json:"sessions"`
 	Message  string          `json:"message,omitempty"`
 }
 
-// SessionDetail provides more info than SessionSummary.
 type SessionDetail struct {
 	ID            string   `json:"id"`
 	Description   string   `json:"description"`
@@ -457,7 +417,6 @@ func (s *Server) handleSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	}
 
 	for _, sess := range sessions {
-		// Filter by repo if specified
 		if args.Repo != "" {
 			found := false
 			for _, r := range sess.Repos {
@@ -471,16 +430,13 @@ func (s *Server) handleSessions(ctx context.Context, req *mcp.CallToolRequest, a
 			}
 		}
 
-		// Filter by status if specified
 		if args.Status != "" && string(sess.Status) != args.Status {
 			continue
 		}
 
-		// Count decisions for this session
 		capsules, _ := capsule.List(s.store, capsule.Filter{SessionID: &sess.ID})
 		decisionCount := len(capsules)
 
-		// Generate summary from description or context
 		summary := sess.Description
 		if len(summary) > 100 {
 			summary = summary[:100] + "..."
@@ -509,12 +465,10 @@ func (s *Server) handleSessions(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, out, nil
 }
 
-// SessionArtifactsArgs defines input for card_session_artifacts.
 type SessionArtifactsArgs struct {
 	SessionID string `json:"session_id" jsonschema:"The session ID to get artifacts from"`
 }
 
-// SessionArtifactsResult contains the session's artifacts.
 type SessionArtifactsResult struct {
 	SessionID         string `json:"session_id"`
 	ExecutionAttempts int    `json:"execution_attempts"` // Number of execution attempts
@@ -539,7 +493,6 @@ func (s *Server) handleSessionArtifacts(ctx context.Context, req *mcp.CallToolRe
 		ExecutionAttempts: len(sess.ExecutionHistory),
 	}
 
-	// Read artifacts from session directory
 	sessionDir := s.store.Path("sessions", sess.ID)
 
 	if content := readArtifactFile(sessionDir, "milestone_ledger.md"); content != "" {
@@ -561,7 +514,6 @@ func (s *Server) handleSessionArtifacts(ctx context.Context, req *mcp.CallToolRe
 	return nil, out, nil
 }
 
-// readArtifactFile reads a file from the session directory, returning empty string on error.
 func readArtifactFile(dir, filename string) string {
 	content, err := os.ReadFile(filepath.Join(dir, filename))
 	if err != nil {
@@ -570,19 +522,16 @@ func readArtifactFile(dir, filename string) string {
 	return string(content)
 }
 
-// SessionExecutionHistoryArgs defines input for card_session_execution_history.
 type SessionExecutionHistoryArgs struct {
 	SessionID string `json:"session_id" jsonschema:"The session ID to get execution history from"`
 }
 
-// ExecutionAttempt represents a single execution attempt with its artifacts.
 type ExecutionAttempt struct {
 	AttemptNumber     int    `json:"attempt_number"`
 	ExecutionLog      string `json:"execution_log"`
 	VerificationNotes string `json:"verification_notes,omitempty"`
 }
 
-// SessionExecutionHistoryResult contains all versioned execution artifacts.
 type SessionExecutionHistoryResult struct {
 	SessionID     string             `json:"session_id"`
 	TotalAttempts int                `json:"total_attempts"`
@@ -608,25 +557,21 @@ func (s *Server) handleSessionExecutionHistory(ctx context.Context, req *mcp.Cal
 		Attempts:      make([]ExecutionAttempt, 0),
 	}
 
-	// Load all versioned execution logs
 	for i := 1; i <= len(sess.ExecutionHistory); i++ {
 		attempt := ExecutionAttempt{
 			AttemptNumber: i,
 		}
 
-		// Load execution log for this attempt
 		execFile := fmt.Sprintf("execution_log_v%d.md", i)
 		if content := readArtifactFile(sessionDir, execFile); content != "" {
 			attempt.ExecutionLog = content
 		}
 
-		// Load verification notes for this attempt (may not exist for last attempt if still in progress)
 		verifyFile := fmt.Sprintf("verification_notes_v%d.md", i)
 		if content := readArtifactFile(sessionDir, verifyFile); content != "" {
 			attempt.VerificationNotes = content
 		}
 
-		// Only include attempts that have at least an execution log
 		if attempt.ExecutionLog != "" {
 			out.Attempts = append(out.Attempts, attempt)
 		}
@@ -643,10 +588,8 @@ func (s *Server) handleSessionExecutionHistory(ctx context.Context, req *mcp.Cal
 	return nil, out, nil
 }
 
-// TagsListArgs defines input for card_tags_list (no arguments needed).
 type TagsListArgs struct{}
 
-// TagsListResult contains the list of tags.
 type TagsListResult struct {
 	Tags    []string `json:"tags"`
 	Count   int      `json:"count"`
@@ -670,7 +613,6 @@ func (s *Server) handleTagsList(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, out, nil
 }
 
-// PromoteToSessionArgs defines input for card_promote_to_session.
 type PromoteToSessionArgs struct {
 	UserConfirmed bool   `json:"user_confirmed" jsonschema:"REQUIRED. Set true ONLY after explicitly asking the user and receiving approval."`
 	SessionID     string `json:"session_id,omitempty" jsonschema:"Ask session ID to promote (optional - uses current ask session if not provided)"`
@@ -679,7 +621,6 @@ type PromoteToSessionArgs struct {
 	Context       string `json:"context,omitempty" jsonschema:"Context from ask conversation to seed the session (used as investigation context)"`
 }
 
-// PromoteToSessionResult is the output of card_promote_to_session.
 type PromoteToSessionResult struct {
 	SessionID string `json:"session_id"`
 	Status    string `json:"status"`
@@ -692,15 +633,12 @@ func (s *Server) handlePromoteToSession(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("user_confirmed must be true - you must ask the user for permission before promoting to a session")
 	}
 
-	// Find the ask session to promote
 	sessionID := args.SessionID
 	if sessionID == "" {
-		// Find most recent ask session
 		activeSessions, err := session.GetActive(s.store)
 		if err != nil || len(activeSessions) == 0 {
 			return nil, nil, fmt.Errorf("no active session to promote - record a decision first to create an ask session")
 		}
-		// Find the most recent ask session
 		for _, sess := range activeSessions {
 			if sess.Mode == session.ModeAsk {
 				sessionID = sess.ID
@@ -712,7 +650,6 @@ func (s *Server) handlePromoteToSession(ctx context.Context, req *mcp.CallToolRe
 		}
 	}
 
-	// Get the session
 	sess, err := session.Get(s.store, sessionID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("session not found: %s", sessionID)
@@ -722,14 +659,12 @@ func (s *Server) handlePromoteToSession(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("session %s is not an ask session (mode: %s)", sessionID, sess.Mode)
 	}
 
-	// Update description if provided
 	if args.Description != "" {
 		if err := session.UpdateDescription(s.store, sessionID, args.Description); err != nil {
 			return nil, nil, fmt.Errorf("failed to update description: %w", err)
 		}
 	}
 
-	// Store context as investigation summary if provided
 	if args.Context != "" {
 		contextPath := s.store.Path("sessions", sessionID, "investigation_summary.md")
 		content := fmt.Sprintf(`---
@@ -744,11 +679,9 @@ status: complete
 %s
 `, sessionID, time.Now().UTC().Format(time.RFC3339), args.Context)
 		if err := os.WriteFile(contextPath, []byte(content), 0644); err != nil {
-			// Log but don't fail - context is optional
 		}
 	}
 
-	// Promote the session
 	startPhase := args.StartPhase
 	if startPhase == "" {
 		startPhase = "plan"
@@ -757,13 +690,10 @@ status: complete
 		return nil, nil, fmt.Errorf("failed to promote session: %w", err)
 	}
 
-	// Get updated session
 	sess, _ = session.Get(s.store, sessionID)
 
-	// Create change records for each repo if not already created
 	for _, repoID := range sess.Repos {
 		if _, err := change.Create(s.store, sess.ID, repoID); err != nil {
-			// Ignore errors - change record may already exist
 			continue
 		}
 	}
@@ -794,7 +724,6 @@ status: complete
 	return nil, out, nil
 }
 
-// RecordArgs defines input for card_record.
 type RecordArgs struct {
 	SessionID    string   `json:"session_id,omitempty" jsonschema:"Session ID to record to (optional - finds active session or creates ask session if not provided)"`
 	Type         string   `json:"type" jsonschema:"Type of record: 'decision' (has alternatives) or 'finding' (observation/conclusion)"`
@@ -806,7 +735,6 @@ type RecordArgs struct {
 	Source       string   `json:"source,omitempty" jsonschema:"'human' or 'agent' (default: agent)"`
 }
 
-// RecordResult is the output of card_record.
 type RecordResult struct {
 	CapsuleID string `json:"capsule_id"`
 	SessionID string `json:"session_id"`
@@ -822,7 +750,6 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 		return nil, nil, fmt.Errorf("choice is required")
 	}
 
-	// Find session
 	var sess *session.Session
 	var err error
 	var createdAskSession bool
@@ -833,11 +760,8 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 			return nil, nil, fmt.Errorf("session not found: %s", args.SessionID)
 		}
 	} else {
-		// Find most recent active session
 		active, err := session.GetActive(s.store)
 		if err != nil || len(active) == 0 {
-			// No active session — create an ask session lazily
-			// Try to detect repo from working directory
 			repoID := s.detectCurrentRepo()
 			if repoID == "" {
 				return nil, nil, fmt.Errorf("no active session and no repo context — run from a registered repo directory or provide session_id")
@@ -852,32 +776,28 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 		}
 	}
 
-	// Determine type
 	capsuleType := capsule.TypeDecision
 	if args.Type == "finding" {
 		capsuleType = capsule.TypeFinding
 	}
 
-	// Determine source
 	source := args.Source
 	if source == "" {
 		source = "agent"
 	}
 
-	// Normalize tags
 	tags := capsule.NormalizeTags(args.Tags)
 
-	// Create capsule
 	c := capsule.Capsule{
 		SessionID:    sess.ID,
 		RepoIDs:      sess.Repos,
 		Phase:        normalizeStatusToPhase(string(sess.Status)),
-		Timestamp:    time.Now().UTC(),
+		CreatedAt:    time.Now().UTC(),
 		Question:     args.Question,
 		Choice:       args.Choice,
 		Alternatives: args.Alternatives,
 		Rationale:    args.Rationale,
-		Source:       source,
+		Origin:       source,
 		Tags:         tags,
 		Type:         capsuleType,
 	}
@@ -902,12 +822,10 @@ func (s *Server) handleRecord(ctx context.Context, req *mcp.CallToolRequest, arg
 	return nil, out, nil
 }
 
-// FileContextArgs defines input for card_file_context.
 type FileContextArgs struct {
 	Files []string `json:"files" jsonschema:"File paths to get context for (e.g. ['src/auth/guard.ts'])"`
 }
 
-// FileDecisions represents decisions related to a specific file.
 type FileDecisions struct {
 	CapsuleCount  int              `json:"capsule_count"`
 	MostRecent    string           `json:"most_recent,omitempty"`
@@ -916,7 +834,6 @@ type FileDecisions struct {
 	Sessions      []string         `json:"sessions"`
 }
 
-// FileContextResult is the output of card_file_context.
 type FileContextResult struct {
 	Files        map[string]FileDecisions `json:"files"`
 	PensieveLink string                   `json:"pensieve_link,omitempty"`
@@ -933,7 +850,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	for _, file := range args.Files {
-		// Query capsules with this file in tags
 		allCapsules, err := capsule.List(s.store, capsule.Filter{})
 		if err != nil {
 			continue
@@ -944,7 +860,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		matchedIDs := make(map[string]bool)
 
 		for _, c := range allCapsules {
-			// Skip invalidated capsules
 			if c.Status == capsule.StatusInvalidated {
 				continue
 			}
@@ -955,7 +870,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 			}
 		}
 
-		// Also search milestone_ledger file manifests
 		manifestMatches := searchFileManifests(s.store, file)
 		for _, c := range manifestMatches {
 			if !matchedIDs[c.ID] {
@@ -975,7 +889,6 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 			continue
 		}
 
-		// Build status summary
 		active, invalidated := 0, 0
 		var mostRecent time.Time
 		for _, c := range matchingCapsules {
@@ -984,8 +897,8 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 			} else {
 				active++
 			}
-			if c.Timestamp.After(mostRecent) {
-				mostRecent = c.Timestamp
+			if c.CreatedAt.After(mostRecent) {
+				mostRecent = c.CreatedAt
 			}
 		}
 
@@ -1000,14 +913,14 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 		var capsuleSummaries []CapsuleSummary
 		for _, c := range matchingCapsules {
 			capsuleSummaries = append(capsuleSummaries, CapsuleSummary{
-				ID:           c.ID,
-				SessionID:    c.SessionID,
-				Phase:        c.Phase,
-				Question:     c.Question,
-				Choice:       c.Choice,
-				Rationale:    c.Rationale,
-				Tags:         c.Tags,
-				Status:       string(c.Status),
+				ID:        c.ID,
+				SessionID: c.SessionID,
+				Phase:     c.Phase,
+				Question:  c.Question,
+				Choice:    c.Choice,
+				Rationale: c.Rationale,
+				Tags:      c.Tags,
+				Status:    string(c.Status),
 			})
 		}
 
@@ -1042,12 +955,10 @@ func (s *Server) handleFileContext(ctx context.Context, req *mcp.CallToolRequest
 	return nil, out, nil
 }
 
-// CapsuleChainArgs defines input for card_capsule_chain.
 type CapsuleChainArgs struct {
 	ID string `json:"id" jsonschema:"The capsule ID to get the supersession chain for"`
 }
 
-// CapsuleChainResult is the output of card_capsule_chain.
 type CapsuleChainResult struct {
 	Capsule      CapsuleSummary   `json:"capsule"`
 	Supersedes   []CapsuleSummary `json:"supersedes,omitempty"`
@@ -1119,7 +1030,6 @@ func (s *Server) handleCapsuleChain(ctx context.Context, req *mcp.CallToolReques
 	return nil, out, nil
 }
 
-// InvalidateArgs defines input for card_invalidate.
 type InvalidateArgs struct {
 	UserConfirmed bool   `json:"user_confirmed" jsonschema:"REQUIRED. Set true ONLY after explicitly asking the user and receiving approval. You MUST explain why invalidation is warranted before asking."`
 	ID            string `json:"id" jsonschema:"The capsule ID to invalidate (required)"`
@@ -1128,7 +1038,6 @@ type InvalidateArgs struct {
 	SupersededBy  string `json:"superseded_by,omitempty" jsonschema:"ID of the capsule that replaces this decision (if any)"`
 }
 
-// InvalidateResult is the output of card_invalidate.
 type InvalidateResult struct {
 	CapsuleID      string          `json:"capsule_id"`
 	PreviousStatus string          `json:"previous_status"`
@@ -1209,7 +1118,6 @@ func (s *Server) handleInvalidate(ctx context.Context, req *mcp.CallToolRequest,
 	return nil, out, nil
 }
 
-// formatRelativeTime formats a time as a human-readable relative string.
 func formatRelativeTime(t time.Time) string {
 	duration := time.Since(t)
 
@@ -1237,12 +1145,10 @@ func formatRelativeTime(t time.Time) string {
 	return t.Format("2006-01-02")
 }
 
-// SessionSummaryArgs defines input for card_session_summary.
 type SessionSummaryArgs struct {
 	SessionID string `json:"session_id" jsonschema:"The session ID to get summary for"`
 }
 
-// SessionSummaryResult is a lightweight session summary.
 type SessionSummaryResult struct {
 	ID          string           `json:"id"`
 	Description string           `json:"description"`
@@ -1289,7 +1195,7 @@ func (s *Server) handleSessionSummary(ctx context.Context, req *mcp.CallToolRequ
 				Tags:      c.Tags,
 				Status:    string(c.Status),
 				Type:      string(c.Type),
-				Recency:   formatRelativeTime(c.Timestamp),
+				Recency:   formatRelativeTime(c.CreatedAt),
 			})
 		}
 	}
@@ -1301,26 +1207,22 @@ func (s *Server) handleSessionSummary(ctx context.Context, req *mcp.CallToolRequ
 	return nil, out, nil
 }
 
-// HotspotsArgs defines input for card_hotspots.
 type HotspotsArgs struct {
 	Repo  string `json:"repo,omitempty" jsonschema:"Repository ID to scope the search (optional)"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of hotspots to return (default 10)"`
 }
 
-// FileHotspot represents a file with decision count.
 type FileHotspot struct {
 	Path          string `json:"path"`
 	DecisionCount int    `json:"decision_count"`
 	LastTouched   string `json:"last_touched"`
 }
 
-// ConceptHotspot represents a concept/tag with decision count.
 type ConceptHotspot struct {
 	Concept       string `json:"concept"`
 	DecisionCount int    `json:"decision_count"`
 }
 
-// HotspotsResult is the output of card_hotspots.
 type HotspotsResult struct {
 	FileHotspots    []FileHotspot    `json:"file_hotspots"`
 	ConceptHotspots []ConceptHotspot `json:"concept_hotspots"`
@@ -1355,8 +1257,8 @@ func (s *Server) handleHotspots(ctx context.Context, req *mcp.CallToolRequest, a
 			switch prefix {
 			case capsule.PrefixFile:
 				fileCounts[value]++
-				if c.Timestamp.After(fileLastTouched[value]) {
-					fileLastTouched[value] = c.Timestamp
+				if c.CreatedAt.After(fileLastTouched[value]) {
+					fileLastTouched[value] = c.CreatedAt
 				}
 			case capsule.PrefixConcept:
 				conceptCounts[value]++
@@ -1425,13 +1327,11 @@ func (s *Server) handleHotspots(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, out, nil
 }
 
-// PatternsArgs defines input for card_patterns.
 type PatternsArgs struct {
 	Repo  string `json:"repo,omitempty" jsonschema:"Repository ID to scope the search (optional)"`
 	Limit int    `json:"limit,omitempty" jsonschema:"Maximum number of patterns to return (default 20)"`
 }
 
-// Pattern represents an implementation pattern.
 type Pattern struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
@@ -1439,7 +1339,6 @@ type Pattern struct {
 	Introduced  string   `json:"introduced"` // When first introduced
 }
 
-// PatternsResult is the output of card_patterns.
 type PatternsResult struct {
 	Patterns []Pattern `json:"patterns"`
 	Message  string    `json:"message,omitempty"`
@@ -1461,7 +1360,6 @@ func (s *Server) handlePatterns(ctx context.Context, req *mcp.CallToolRequest, a
 	patternMap := make(map[string]*Pattern)
 
 	for _, sess := range sessions {
-		// Filter by repo if specified
 		if args.Repo != "" {
 			found := false
 			for _, r := range sess.Repos {
@@ -1519,7 +1417,6 @@ func (s *Server) handlePatterns(ctx context.Context, req *mcp.CallToolRequest, a
 	return nil, out, nil
 }
 
-// extractPatternsFromLedger parses patterns from a milestone_ledger markdown file.
 func extractPatternsFromLedger(content string) []Pattern {
 	var patterns []Pattern
 
@@ -1577,13 +1474,11 @@ func extractPatternsFromLedger(content string) []Pattern {
 	return patterns
 }
 
-// PreflightArgs defines input for card_preflight.
 type PreflightArgs struct {
 	Files  []string `json:"files" jsonschema:"File paths to get pre-flight briefing for"`
 	Intent string   `json:"intent,omitempty" jsonschema:"What you're planning to do (e.g., 'adding rate limiting', 'refactoring auth')"`
 }
 
-// PreflightResult is the output of card_preflight.
 type PreflightResult struct {
 	Files             map[string]FileDecisions `json:"files"`
 	RelevantDecisions []CapsuleSummary         `json:"relevant_decisions"`
@@ -1610,7 +1505,6 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 		sessionSet := make(map[string]bool)
 
 		for _, c := range allCapsules {
-			// Skip invalidated capsules
 			if c.Status == capsule.StatusInvalidated {
 				continue
 			}
@@ -1621,7 +1515,6 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 			}
 		}
 
-		// Also search milestone_ledger file manifests
 		manifestMatches := searchFileManifests(s.store, file)
 		for _, c := range manifestMatches {
 			if !matchedCapsuleIDs[c.ID] {
@@ -1641,7 +1534,6 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 			continue
 		}
 
-		// Build status summary
 		active, invalidated := 0, 0
 		var mostRecent time.Time
 		for _, c := range matchingCapsules {
@@ -1650,8 +1542,8 @@ func (s *Server) handlePreflight(ctx context.Context, req *mcp.CallToolRequest, 
 			} else {
 				active++
 			}
-			if c.Timestamp.After(mostRecent) {
-				mostRecent = c.Timestamp
+			if c.CreatedAt.After(mostRecent) {
+				mostRecent = c.CreatedAt
 			}
 		}
 
@@ -1829,7 +1721,7 @@ type AgentGuidanceResult struct {
 func (s *Server) handleAgentGuidance(ctx context.Context, req *mcp.CallToolRequest, args AgentGuidanceArgs) (*mcp.CallToolResult, any, error) {
 	guidance := `# CARD Proactive Usage Guide
 
-## The Dream: Push, Don't Pull
+## Push, Don't Pull
 CARD should tell you what you need to know BEFORE you make mistakes. Don't wait to be asked - push relevant context proactively.
 
 ## Artifact Lifecycle — What Survives vs. What's Ephemeral
@@ -2279,13 +2171,11 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 		}
 	}
 
-	// Determine origin
 	origin := args.Origin
 	if origin == "" {
 		origin = "agent"
 	}
 
-	// Determine type
 	capsuleType := capsule.TypeDecision
 	if args.Type != "" {
 		capsuleType = capsule.CapsuleType(strings.ToLower(args.Type))
@@ -2303,14 +2193,12 @@ func (s *Server) handleDecision(ctx context.Context, req *mcp.CallToolRequest, a
 		SessionID:    sessionID,
 		RepoIDs:      sess.Repos,
 		Phase:        phase,
-		Timestamp:    now,
 		CreatedAt:    now,
 		Question:     args.Question,
 		Choice:       args.Choice,
 		Alternatives: args.Alternatives,
 		Rationale:    args.Rationale,
 		Origin:       origin,
-		Source:       origin, // Keep Source for backwards compatibility
 		Tags:         normalizedTags,
 		Type:         capsuleType,
 		EnabledBy:    args.EnabledBy,
@@ -2585,7 +2473,7 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 
 		// Get recent decisions
 		sort.Slice(allCapsules, func(i, j int) bool {
-			return allCapsules[i].Timestamp.After(allCapsules[j].Timestamp)
+			return allCapsules[i].CreatedAt.After(allCapsules[j].CreatedAt)
 		})
 
 		count := 0
@@ -2602,7 +2490,7 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 				Rationale: c.Rationale,
 				Tags:      c.Tags,
 				Status:    string(c.Status),
-				Recency:   formatRelativeTime(c.Timestamp),
+				Recency:   formatRelativeTime(c.CreatedAt),
 			})
 			count++
 		}
@@ -2643,14 +2531,14 @@ func (s *Server) handleContext(ctx context.Context, req *mcp.CallToolRequest, ar
 			intentCapsules := searchByIntent(allCapsules, args.Intent)
 			for _, c := range intentCapsules {
 				out.RelevantDecisions = append(out.RelevantDecisions, CapsuleSummary{
-					ID:           c.ID,
-					SessionID:    c.SessionID,
-					Phase:        c.Phase,
-					Question:     c.Question,
-					Choice:       c.Choice,
-					Rationale:    c.Rationale,
-					Tags:         c.Tags,
-					Status:       string(c.Status),
+					ID:        c.ID,
+					SessionID: c.SessionID,
+					Phase:     c.Phase,
+					Question:  c.Question,
+					Choice:    c.Choice,
+					Rationale: c.Rationale,
+					Tags:      c.Tags,
+					Status:    string(c.Status),
 				})
 			}
 		}
@@ -2831,7 +2719,7 @@ func (s *Server) handleQuery(ctx context.Context, req *mcp.CallToolRequest, args
 				Tags:         c.Tags,
 				Status:       string(c.Status),
 				SupersededBy: c.SupersededBy,
-				Recency:      formatRelativeTime(c.Timestamp),
+				Recency:      formatRelativeTime(c.CreatedAt),
 			})
 		}
 
@@ -3007,14 +2895,14 @@ func (s *Server) handleSessionOps(ctx context.Context, req *mcp.CallToolRequest,
 				var capsuleSummaries []CapsuleSummary
 				for _, c := range group {
 					capsuleSummaries = append(capsuleSummaries, CapsuleSummary{
-						ID:           c.ID,
-						SessionID:    c.SessionID,
-						Phase:        c.Phase,
-						Question:     c.Question,
-						Choice:       c.Choice,
-						Rationale:    c.Rationale,
-						Tags:         c.Tags,
-						Status:       string(c.Status),
+						ID:        c.ID,
+						SessionID: c.SessionID,
+						Phase:     c.Phase,
+						Question:  c.Question,
+						Choice:    c.Choice,
+						Rationale: c.Rationale,
+						Tags:      c.Tags,
+						Status:    string(c.Status),
 					})
 				}
 				out.DuplicateGroups = append(out.DuplicateGroups, DuplicateGroup{
@@ -3030,14 +2918,14 @@ func (s *Server) handleSessionOps(ctx context.Context, req *mcp.CallToolRequest,
 			// For review, also include all decisions
 			for _, c := range capsules {
 				out.Decisions = append(out.Decisions, CapsuleSummary{
-					ID:           c.ID,
-					SessionID:    c.SessionID,
-					Phase:        c.Phase,
-					Question:     c.Question,
-					Choice:       c.Choice,
-					Rationale:    c.Rationale,
-					Tags:         c.Tags,
-					Status:       string(c.Status),
+					ID:        c.ID,
+					SessionID: c.SessionID,
+					Phase:     c.Phase,
+					Question:  c.Question,
+					Choice:    c.Choice,
+					Rationale: c.Rationale,
+					Tags:      c.Tags,
+					Status:    string(c.Status),
 				})
 			}
 			out.Message = fmt.Sprintf("Session has %d decisions. Found %d potential duplicate groups.", len(capsules), len(out.DuplicateGroups))
@@ -3163,10 +3051,10 @@ func (s *Server) handleCapsuleOps(ctx context.Context, req *mcp.CallToolRequest,
 		// Convert to MCP result format
 		graph := &DependencyGraph{
 			Root: CapsuleSummary{
-				ID:           graphResult.Root.ID,
-				SessionID:    graphResult.Root.SessionID,
-				Question:     graphResult.Root.Question,
-				Choice:       graphResult.Root.Choice,
+				ID:        graphResult.Root.ID,
+				SessionID: graphResult.Root.SessionID,
+				Question:  graphResult.Root.Question,
+				Choice:    graphResult.Root.Choice,
 			},
 			ASCII: graphResult.ASCII,
 		}
@@ -3186,9 +3074,9 @@ func (s *Server) handleCapsuleOps(ctx context.Context, req *mcp.CallToolRequest,
 			}
 
 			summary := CapsuleSummary{
-				ID:           targetNode.ID,
-				Question:     targetNode.Question,
-				Choice:       targetNode.Choice,
+				ID:       targetNode.ID,
+				Question: targetNode.Question,
+				Choice:   targetNode.Choice,
 			}
 
 			switch edge.Relationship {
@@ -3282,11 +3170,7 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 	// Active at time T: created_at <= T AND (invalidated_at IS NULL OR invalidated_at > T)
 	for _, c := range allCapsules {
 		// Check if capsule existed at snapshot time
-		createdAt := c.CreatedAt
-		if createdAt.IsZero() {
-			createdAt = c.Timestamp // Fallback to timestamp for legacy capsules
-		}
-		if createdAt.After(snapshotTime) {
+		if c.CreatedAt.After(snapshotTime) {
 			continue // Created after snapshot
 		}
 
@@ -3333,7 +3217,7 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 			Rationale: c.Rationale,
 			Tags:      c.Tags,
 			Status:    string(c.Status),
-			Recency:   formatRelativeTime(createdAt),
+			Recency:   formatRelativeTime(c.CreatedAt),
 		})
 
 		// Update summary counts
@@ -3348,32 +3232,27 @@ func (s *Server) handleSnapshot(ctx context.Context, req *mcp.CallToolRequest, a
 
 		// Find capsules created since snapshot
 		for _, c := range allCapsules {
-			createdAt := c.CreatedAt
-			if createdAt.IsZero() {
-				createdAt = c.Timestamp
-			}
-
 			// Created after snapshot
-			if createdAt.After(snapshotTime) && c.Status != capsule.StatusInvalidated {
+			if c.CreatedAt.After(snapshotTime) && c.Status != capsule.StatusInvalidated {
 				diff.CreatedSince = append(diff.CreatedSince, CapsuleSummary{
-					ID:           c.ID,
-					SessionID:    c.SessionID,
-					Question:     c.Question,
-					Choice:       c.Choice,
-					Status:       string(c.Status),
-					Recency:      formatRelativeTime(createdAt),
+					ID:        c.ID,
+					SessionID: c.SessionID,
+					Question:  c.Question,
+					Choice:    c.Choice,
+					Status:    string(c.Status),
+					Recency:   formatRelativeTime(c.CreatedAt),
 				})
 			}
 
 			// Invalidated after snapshot
 			if c.InvalidatedAt != nil && c.InvalidatedAt.After(snapshotTime) && c.InvalidatedAt.Before(now) {
 				diff.InvalidatedSince = append(diff.InvalidatedSince, CapsuleSummary{
-					ID:           c.ID,
-					SessionID:    c.SessionID,
-					Question:     c.Question,
-					Choice:       c.Choice,
-					Status:       string(c.Status),
-					Rationale:    fmt.Sprintf("Invalidated: %s", c.InvalidationReason),
+					ID:        c.ID,
+					SessionID: c.SessionID,
+					Question:  c.Question,
+					Choice:    c.Choice,
+					Status:    string(c.Status),
+					Rationale: fmt.Sprintf("Invalidated: %s", c.InvalidationReason),
 				})
 			}
 		}

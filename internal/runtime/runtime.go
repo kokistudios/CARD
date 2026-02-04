@@ -2,17 +2,13 @@ package runtime
 
 import "errors"
 
-// InvokeMode controls how an AI runtime is launched.
 type InvokeMode int
 
 const (
-	// ModeInteractive opens the runtime in interactive mode.
 	ModeInteractive InvokeMode = iota
-	// ModeNonInteractive runs the runtime to completion without interaction.
 	ModeNonInteractive
 )
 
-// InvokeOptions configures a runtime invocation.
 type InvokeOptions struct {
 	SystemPrompt   string
 	InitialMessage string
@@ -21,12 +17,10 @@ type InvokeOptions struct {
 	OutputDir      string
 	Mode           InvokeMode
 	OnStart        func()
-	// MCPServerName and CardBinaryPath are used for non-interactive mode MCP config
 	MCPServerName  string
 	CardBinaryPath string
 }
 
-// Runtime represents a supported AI runtime.
 type Runtime interface {
 	Name() string
 	Available() error

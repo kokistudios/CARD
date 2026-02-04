@@ -5,7 +5,6 @@ import (
 	"runtime"
 )
 
-// Notify sends an OS-level notification. Fails silently if unavailable.
 func Notify(title, message string) {
 	if runtime.GOOS != "darwin" {
 		return

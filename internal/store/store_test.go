@@ -94,9 +94,6 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Runtime.Type != "claude" {
 		t.Errorf("expected default runtime type 'claude', got %s", cfg.Runtime.Type)
 	}
-	if cfg.Claude.Path != "claude" {
-		t.Errorf("expected default claude path 'claude', got %s", cfg.Claude.Path)
-	}
 	if !cfg.Session.AutoContinueSimplify {
 		t.Error("expected auto_continue_simplify true by default")
 	}
@@ -127,12 +124,6 @@ func TestLoadMergesDefaults(t *testing.T) {
 	if s.Config.Runtime.Type != "claude" {
 		t.Errorf("expected default runtime type, got %s", s.Config.Runtime.Type)
 	}
-	if s.Config.Runtime.Path != "claude" {
-		t.Errorf("expected runtime path to inherit claude path, got %s", s.Config.Runtime.Path)
-	}
-	if s.Config.Claude.Path != "claude" {
-		t.Errorf("expected default claude path, got %s", s.Config.Claude.Path)
-	}
 	if s.Config.Recall.MaxContextBlocks != 10 {
 		t.Errorf("expected default max_context_blocks, got %d", s.Config.Recall.MaxContextBlocks)
 	}
@@ -144,21 +135,15 @@ func TestSetConfigValue(t *testing.T) {
 	Init(home, false)
 	s, _ := Load(home)
 
-	if err := s.SetConfigValue("claude.path", "/usr/local/bin/claude"); err != nil {
+	if err := s.SetConfigValue("runtime.path", "/usr/local/bin/claude"); err != nil {
 		t.Fatal(err)
 	}
-	if s.Config.Claude.Path != "/usr/local/bin/claude" {
-		t.Errorf("expected updated path, got %s", s.Config.Claude.Path)
-	}
 	if s.Config.Runtime.Path != "/usr/local/bin/claude" {
-		t.Errorf("expected runtime path to follow claude path, got %s", s.Config.Runtime.Path)
+		t.Errorf("expected updated runtime path, got %s", s.Config.Runtime.Path)
 	}
 
 	// Reload and verify persistence
 	s2, _ := Load(home)
-	if s2.Config.Claude.Path != "/usr/local/bin/claude" {
-		t.Errorf("config not persisted, got %s", s2.Config.Claude.Path)
-	}
 	if s2.Config.Runtime.Path != "/usr/local/bin/claude" {
 		t.Errorf("runtime config not persisted, got %s", s2.Config.Runtime.Path)
 	}

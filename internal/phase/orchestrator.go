@@ -22,7 +22,6 @@ import (
 	"github.com/kokistudios/card/internal/ui"
 )
 
-// phaseIndex returns the 1-based index of a phase in the given sequence.
 func phaseIndex(p Phase, phases []Phase) int {
 	for i, ph := range phases {
 		if ph == p {
@@ -32,28 +31,22 @@ func phaseIndex(p Phase, phases []Phase) int {
 	return 0
 }
 
-// RunSession drives the full phase pipeline for a session.
 func RunSession(s *store.Store, sess *session.Session) error {
 	return RunSessionFromPhase(s, sess, "")
 }
 
-// RunSessionFromPhase drives the phase pipeline starting from a specific phase.
-// If startPhase is empty, starts from the beginning.
 func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase) error {
 	phases := SequenceFor(sess.Mode)
 	totalPhases := len(phases)
 
-	// Display CARD logo at session start (only when starting from beginning)
 	if startPhase == "" {
 		ui.LogoWithTagline("session mode")
 	}
 
-	// Set up signal handling for graceful Ctrl+C
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	defer signal.Stop(sigCh)
 
-	// Skip phases before startPhase
 	skipping := startPhase != ""
 
 	for _, p := range phases {
@@ -71,12 +64,10 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 			continue
 		}
 
-		// Execute phase runs in a loop with verify
 		if p == PhaseExecute {
 			if err := runExecuteVerifyLoop(s, sess, sigCh, totalPhases); err != nil {
 				return err
 			}
-			// Reload session after loop
 			var err error
 			sess, err = session.Get(s, sess.ID)
 			if err != nil {
@@ -85,7 +76,6 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 			continue
 		}
 
-		// Transition session to this phase's status (skip if already there from resume)
 		targetStatus := SessionStatus(p)
 
 		if sess.Status != targetStatus {
@@ -94,14 +84,12 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 			}
 		}
 
-		// Reload session after transition
 		var err error
 		sess, err = session.Get(s, sess.ID)
 		if err != nil {
 			return err
 		}
 
-		// Check for interrupt
 		select {
 		case <-sigCh:
 			ui.Warning("Interrupted. Pausing session...")
@@ -115,10 +103,8 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 			return err
 		}
 
-		// Reload session in case repos were added via signals
 		sess, _ = session.Get(s, sess.ID)
 
-		// Check if approval is needed
 		needsApproval := NeedsApproval(p)
 		if !needsApproval && p == PhaseSimplify && !s.Config.Session.AutoContinueSimplify {
 			needsApproval = true
@@ -137,32 +123,25 @@ func RunSessionFromPhase(s *store.Store, sess *session.Session, startPhase Phase
 			}
 		}
 
-		// Notify after each phase
 		ui.Notify("CARD", fmt.Sprintf("%s phase complete", p))
 	}
 
-	// Clean up intermediate artifacts — only milestone ledger and capsules persist
 	cleanupIntermediateArtifacts(s, sess)
 
-	// Regenerate session summary to remove stale links to cleaned-up artifacts
 	if err := session.RegenerateSummary(s, sess.ID); err != nil {
 		ui.Warning(fmt.Sprintf("Failed to regenerate session summary: %v", err))
 	}
 
-	// Final transition to completed
 	if err := session.Transition(s, sess.ID, session.StatusCompleted); err != nil {
 		return fmt.Errorf("failed to mark session completed: %w", err)
 	}
 
-	// Reload for final output
 	sess, _ = session.Get(s, sess.ID)
 	ui.SessionComplete(sess.ID)
 	ui.Notify("CARD", fmt.Sprintf("Session %s completed!", sess.ID))
 	return nil
 }
 
-// runSessionWidePhase runs a phase once for the entire session,
-// covering all repos in a single runtime invocation.
 func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPhases int) error {
 	idx := phaseIndex(p, SequenceFor(sess.Mode))
 	phaseName := string(p)
@@ -187,21 +166,17 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 
 	workDir := filepath.Join(os.TempDir(), "card", sess.ID, phaseName)
 
-	// Load prior artifacts for context
 	priorArtifacts := loadPriorArtifacts(s, sess.ID, p)
 
-	// For re-execution, also load versioned execution logs and verification notes
 	if p == PhaseExecute && len(sess.ExecutionHistory) > 1 {
 		priorArtifacts = append(priorArtifacts, loadVersionedExecutionHistory(s, sess.ID, len(sess.ExecutionHistory))...)
 	}
 
-	// Determine which template to use
 	templatePhase := p
 	if p == PhaseExecute && len(sess.ExecutionHistory) > 1 {
 		templatePhase = "re-execute" // Use re-execute.md template
 	}
 
-	// Render session-wide prompt
 	systemPrompt, err := RenderSessionWidePrompt(s, sess, templatePhase, workDir, priorArtifacts)
 	if err != nil {
 		return fmt.Errorf("failed to render session-wide prompt: %w", err)
@@ -214,7 +189,6 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 		return fmt.Errorf("failed to create work directory: %w", err)
 	}
 
-	// Clear any stale phase complete signal from previous runs
 	_ = reposignal.ClearPhaseComplete(workDir)
 
 	rt, err := runtime.New(s.Config.Runtime.Type, s.Config.Runtime.Path)
@@ -222,7 +196,6 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 		return fmt.Errorf("failed to initialize runtime: %w", err)
 	}
 
-	// Determine invocation mode
 	mode := runtime.ModeInteractive
 	if p == PhasePlan || p == PhaseSimplify || p == PhaseRecord {
 		mode = runtime.ModeNonInteractive
@@ -230,8 +203,6 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 
 	ui.PhaseLaunch(phaseName, rt.Name(), mode == runtime.ModeInteractive)
 
-	// For interactive mode, spinner shows briefly during startup then stops when the runtime UI takes over.
-	// For non-interactive mode, spinner runs throughout execution to show progress.
 	var spin *ui.Spinner
 	var onStart func()
 	if mode == runtime.ModeInteractive {
@@ -250,34 +221,27 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 		Mode:           mode,
 		OnStart:        onStart,
 	})
-	spin.Stop() // Always stop spinner after invoke completes
+	spin.Stop()
 	if err != nil {
 		if errors.Is(err, runtime.ErrPhaseComplete) {
-			// Signal-based phase completion - check signal for details
-			sig, sigErr := reposignal.CheckPhaseComplete(workDir)
+					sig, sigErr := reposignal.CheckPhaseComplete(workDir)
 			if sigErr == nil && sig != nil {
 				switch sig.Status {
 				case "complete":
-					// Normal completion via signal - continue
 					ui.PhaseComplete(phaseName)
 				case "blocked":
-					// Phase blocked - pause session with reason
 					ui.Warning(fmt.Sprintf("Phase blocked: %s", sig.Summary))
 					_ = session.Pause(s, sess.ID)
 					ui.Info(fmt.Sprintf("Session %s paused due to blocking issue. Resume with 'card session resume'.", sess.ID))
 					return nil
 				case "needs_input":
-					// Shouldn't reach here since we only trigger on "complete"
 					ui.Warning("Phase needs input - this is unexpected")
 				}
 			} else {
-				// Signal file missing or invalid after ErrPhaseComplete - treat as complete
 				ui.PhaseComplete(phaseName)
 			}
-			// Clear signal file after processing
 			_ = reposignal.ClearPhaseComplete(workDir)
 		} else if errors.Is(err, runtime.ErrInterrupted) {
-			// Ctrl+C fallback - pause session (existing behavior)
 			ui.Warning("Interrupted. Pausing session...")
 			_ = session.Pause(s, sess.ID)
 			ui.Info(fmt.Sprintf("Session %s paused at %s. Resume with 'card session resume'.", sess.ID, phaseName))
@@ -289,7 +253,6 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 		ui.PhaseComplete(phaseName)
 	}
 
-	// Simplify and verify produce no artifact
 	if !ProducesArtifact(p) {
 		_ = os.RemoveAll(workDir)
 		return nil
@@ -297,14 +260,12 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 
 	ui.Status("Ingesting artifact...")
 
-	// Look for the artifact
 	expectedFilename := artifact.PhaseFilename(phaseName)
 	a, err := locateArtifact(s, sess.ID, workDir, primaryRepo.LocalPath, expectedFilename, phaseName)
 	if err != nil {
 		return err
 	}
 
-	// Ensure frontmatter
 	if a.Frontmatter.Session == "" {
 		a.Frontmatter.Session = sess.ID
 	}
@@ -317,51 +278,29 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	if a.Frontmatter.Status == "" {
 		a.Frontmatter.Status = "final"
 	}
-	// Set repos from session
 	if len(a.Frontmatter.Repos) == 0 {
 		a.Frontmatter.Repos = sess.Repos
 	}
 
-	// Validate
 	if err := artifact.Validate(a, phaseName); err != nil {
 		ui.Warning(fmt.Sprintf("Artifact validation: %v", err))
 	}
 
-	// Render for non-interactive phases
 	if mode == runtime.ModeNonInteractive && a.Body != "" {
 		fmt.Fprintln(os.Stderr)
 		ui.Info(fmt.Sprintf("── %s artifact ──", strings.ToUpper(phaseName)))
 		ui.RenderMarkdown(a.Body)
 	}
 
-	// Store at session level
 	storedPath, err := artifact.StoreSessionLevel(s, sess.ID, a)
 	if err != nil {
 		return fmt.Errorf("failed to store artifact: %w", err)
 	}
 
-	// Regenerate session summary to update Obsidian links with new artifact
 	if err := session.RegenerateSummary(s, sess.ID); err != nil {
 		ui.Warning(fmt.Sprintf("Failed to update session summary: %v", err))
 	}
 
-	// Note: Versioning of execution_log and verification_notes now happens BEFORE re-execute
-	// (in runExecuteVerifyLoop) to avoid duplication between v1 and the unversioned file.
-
-	// Extract capsules
-	capsules, err := capsule.ExtractFromArtifact(a)
-	if err != nil {
-		ui.Warning(fmt.Sprintf("Capsule extraction failed: %v", err))
-	} else if len(capsules) > 0 {
-		for _, c := range capsules {
-			if err := capsule.Store(s, c); err != nil {
-				ui.Warning(fmt.Sprintf("Failed to store capsule %s: %v", c.ID, err))
-			}
-		}
-		ui.Logger.Info("Decision capsules extracted", "count", len(capsules), "phase", phaseName)
-	}
-
-	// Check for repo request signals (investigate and execute)
 	if p == PhaseInvestigate || p == PhaseExecute {
 		sig, sigErr := reposignal.CheckRepoRequests(workDir)
 		if sigErr != nil {
@@ -378,9 +317,7 @@ func runSessionWidePhase(s *store.Store, sess *session.Session, p Phase, totalPh
 	return nil
 }
 
-// locateArtifact finds and loads an artifact from the work directory, repo root, or session store.
 func locateArtifact(s *store.Store, sessionID, workDir, repoPath, expectedFilename, phaseName string) (*artifact.Artifact, error) {
-	// 1. Check workDir for exact filename
 	artifactPath := filepath.Join(workDir, expectedFilename)
 	if _, err := os.Stat(artifactPath); err == nil {
 		a, err := artifact.Load(artifactPath)
@@ -390,7 +327,6 @@ func locateArtifact(s *store.Store, sessionID, workDir, repoPath, expectedFilena
 		return a, nil
 	}
 
-	// 2. Check repo root for exact filename
 	repoArtifactPath := filepath.Join(repoPath, expectedFilename)
 	if _, err := os.Stat(repoArtifactPath); err == nil {
 		a, err := artifact.Load(repoArtifactPath)
@@ -401,19 +337,18 @@ func locateArtifact(s *store.Store, sessionID, workDir, repoPath, expectedFilena
 		return a, nil
 	}
 
-	// 3. Check workDir for any .md file
 	if a, err := findArtifactInDir(workDir); err == nil {
 		return a, nil
 	}
 
-	// 4. Check repo root for any .md artifact file (Claude sometimes ignores output dir)
+	// Claude sometimes ignores output dir
 	if a, path, err := findArtifactInDirWithPath(repoPath); err == nil {
 		ui.Warning(fmt.Sprintf("Found artifact at %s instead of expected %s — Claude ignored output dir", path, artifactPath))
 		_ = os.Rename(path, artifactPath)
 		return a, nil
 	}
 
-	// 5. Check session store for MCP-written artifacts
+	// MCP tools write artifacts directly to session store
 	if s != nil && sessionID != "" {
 		sessionArtifactPath := s.Path("sessions", sessionID, expectedFilename)
 		if _, err := os.Stat(sessionArtifactPath); err == nil {
@@ -429,18 +364,15 @@ func locateArtifact(s *store.Store, sessionID, workDir, repoPath, expectedFilena
 	return nil, fmt.Errorf("no artifact found after %s phase — expected %s in %s or %s", phaseName, expectedFilename, workDir, repoPath)
 }
 
-// runExecuteVerifyLoop runs execute and verify phases in a loop until the user accepts.
 func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.Signal, totalPhases int) error {
 	firstIteration := true
 	for {
-		// Reload current status to handle resume from interrupted execute
 		currentSess, err := session.Get(s, sess.ID)
 		if err != nil {
 			return err
 		}
 
 		if firstIteration {
-			// If already executing (resumed from interrupt), skip transitions
 			if currentSess.Status != session.StatusExecuting {
 				if err := session.Transition(s, sess.ID, session.StatusApproved); err != nil {
 					return fmt.Errorf("failed to transition to approved: %w", err)
@@ -451,7 +383,6 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 			}
 			firstIteration = false
 		} else {
-			// Re-execute: version previous iteration's artifacts before overwriting
 			versionPreviousIteration(s, sess)
 
 			if err := session.Transition(s, sess.ID, session.StatusExecuting); err != nil {
@@ -459,7 +390,6 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 			}
 		}
 
-		// Record execution attempt
 		sess, err = session.Get(s, sess.ID)
 		if err != nil {
 			return err
@@ -486,7 +416,6 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 		if err := runSessionWidePhase(s, sess, PhaseExecute, totalPhases); err != nil {
 			return err
 		}
-		// Reload in case repos were added via signals
 		sess, _ = session.Get(s, sess.ID)
 
 		if err := session.Transition(s, sess.ID, session.StatusVerifying); err != nil {
@@ -510,14 +439,11 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 
 		switch decision {
 		case "accept":
-			// Update execution outcome
-			sess.UpdateLastExecutionOutcome("completed", "")
+				sess.UpdateLastExecutionOutcome("completed", "")
 			_ = session.Update(s, sess)
 			return nil
 		case "reexecute":
-			// Add challenge to execution-phase capsules
 			addChallengeToExecutionCapsules(s, sess.ID, "Failed verification - re-executing")
-			// Update execution outcome
 			sess.UpdateLastExecutionOutcome("failed_verification", "Re-execution requested")
 			_ = session.Update(s, sess)
 			ui.Info("Re-executing with feedback incorporated...")
@@ -529,7 +455,6 @@ func runExecuteVerifyLoop(s *store.Store, sess *session.Session, sigCh chan os.S
 	}
 }
 
-// promptApproval asks the developer whether to proceed to the next phase.
 func promptApproval(completedPhase Phase) (bool, error) {
 	nextPhase := ""
 	switch completedPhase {
@@ -542,8 +467,6 @@ func promptApproval(completedPhase Phase) (bool, error) {
 	return ui.ApprovalPrompt(string(completedPhase), nextPhase)
 }
 
-// loadPriorArtifacts loads artifacts from earlier phases for context.
-// All artifacts are stored at session level.
 func loadPriorArtifacts(s *store.Store, sessionID string, currentPhase Phase) []*artifact.Artifact {
 	var prior []*artifact.Artifact
 	sessionDir := s.Path("sessions", sessionID)
@@ -571,20 +494,16 @@ func loadPriorArtifacts(s *store.Store, sessionID string, currentPhase Phase) []
 	return prior
 }
 
-// loadVersionedExecutionHistory loads all versioned execution logs and verification notes
-// up to (but not including) the current attempt.
 func loadVersionedExecutionHistory(s *store.Store, sessionID string, currentAttempt int) []*artifact.Artifact {
 	var history []*artifact.Artifact
 	sessionDir := s.Path("sessions", sessionID)
 
-	// Load versioned execution logs (v1, v2, ..., v(currentAttempt-1))
 	for i := 1; i < currentAttempt; i++ {
 		execPath := filepath.Join(sessionDir, fmt.Sprintf("execution_log_v%d.md", i))
 		if a, err := artifact.Load(execPath); err == nil {
 			history = append(history, a)
 		}
 
-		// Load corresponding verification notes
 		verifyPath := filepath.Join(sessionDir, fmt.Sprintf("verification_notes_v%d.md", i))
 		if a, err := artifact.Load(verifyPath); err == nil {
 			history = append(history, a)
@@ -599,11 +518,8 @@ func loadVersionedExecutionHistory(s *store.Store, sessionID string, currentAtte
 // This prevents duplication where v1 would otherwise match the unversioned file.
 func versionPreviousIteration(s *store.Store, sess *session.Session) {
 	sessionDir := s.Path("sessions", sess.ID)
-	// Version number is the previous iteration (current ExecutionHistory length - 1)
-	// because we're versioning BEFORE adding the new attempt
 	versionNum := len(sess.ExecutionHistory)
 
-	// Version execution_log.md → execution_log_v{N}.md
 	execPath := filepath.Join(sessionDir, "execution_log.md")
 	if data, err := os.ReadFile(execPath); err == nil {
 		versionedPath := filepath.Join(sessionDir, fmt.Sprintf("execution_log_v%d.md", versionNum))
@@ -612,7 +528,6 @@ func versionPreviousIteration(s *store.Store, sess *session.Session) {
 		}
 	}
 
-	// Version verification_notes.md → verification_notes_v{N}.md
 	verifyPath := filepath.Join(sessionDir, "verification_notes.md")
 	if data, err := os.ReadFile(verifyPath); err == nil {
 		versionedPath := filepath.Join(sessionDir, fmt.Sprintf("verification_notes_v%d.md", versionNum))
@@ -622,7 +537,6 @@ func versionPreviousIteration(s *store.Store, sess *session.Session) {
 	}
 }
 
-// CurrentPhase determines the current phase from a session's status.
 func CurrentPhase(status session.SessionStatus) (Phase, error) {
 	switch status {
 	case session.StatusStarted, session.StatusInvestigating:
@@ -644,7 +558,6 @@ func CurrentPhase(status session.SessionStatus) (Phase, error) {
 	}
 }
 
-// saveChange re-saves a change record directly.
 func saveChange(s *store.Store, ch *change.Change) {
 	dir := s.Path("sessions", ch.SessionID, "changes", ch.RepoID)
 	path := filepath.Join(dir, "change.yaml")
@@ -656,7 +569,6 @@ func saveChange(s *store.Store, ch *change.Change) {
 	_ = os.WriteFile(path, data, 0644)
 }
 
-// addChallengeToExecutionCapsules adds a challenge to all execute-phase capsules.
 func addChallengeToExecutionCapsules(s *store.Store, sessionID, reason string) {
 	caps, err := capsule.List(s, capsule.Filter{SessionID: &sessionID})
 	if err != nil {
@@ -686,14 +598,12 @@ func addChallengeToExecutionCapsules(s *store.Store, sessionID, reason string) {
 func cleanupIntermediateArtifacts(s *store.Store, sess *session.Session) {
 	sessionDir := s.Path("sessions", sess.ID)
 
-	// Remove all intermediate phase artifacts (everything except milestone_ledger and capsules)
 	intermediatePhases := []string{"investigate", "plan", "review", "execute", "verify", "conclude"}
 	for _, phase := range intermediatePhases {
 		path := filepath.Join(sessionDir, artifact.PhaseFilename(phase))
 		_ = os.Remove(path)
 	}
 
-	// Remove all versioned artifacts (execution_log_v*.md, verification_notes_v*.md)
 	entries, err := os.ReadDir(sessionDir)
 	if err == nil {
 		for _, entry := range entries {

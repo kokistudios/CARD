@@ -16,8 +16,6 @@ import (
 	"github.com/muesli/termenv"
 )
 
-// wisdomQuotes are Harry Potter-inspired quotes for CARD startup.
-// [engineer] is replaced with the user's name.
 var wisdomQuotes = []string{
 	"It is the unknown we fear when we look upon deadlines and darkness, nothing more.",
 	"Of course it is happening inside your head, [engineer], but why on earth should that mean that it is not real?",
@@ -26,15 +24,12 @@ var wisdomQuotes = []string{
 	"To the well-organized mind, scope creep is but the next great adventure.",
 }
 
-// RandomWisdom returns a random wisdom quote with [engineer] replaced by the user's name.
 func RandomWisdom() string {
 	quote := wisdomQuotes[rand.Intn(len(wisdomQuotes))]
 	name := getUserName()
 	return strings.ReplaceAll(quote, "[engineer]", name)
 }
 
-// WisdomBanner renders the CARD logo alongside an arcane wizard face, with a wisdom quote below.
-// This is the polished CARD startup display for `card ask`.
 func WisdomBanner() {
 	// Card styles (matching Logo())
 	cardBorder := lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
@@ -80,7 +75,6 @@ func WisdomBanner() {
 	fmt.Fprintln(os.Stderr)
 }
 
-// getUserName attempts to get the user's name from git config, falling back to sensible defaults.
 func getUserName() string {
 	// Try git config user.name first
 	if name := gitConfigValue("user.name"); name != "" {
@@ -103,7 +97,6 @@ func getUserName() string {
 	return "engineer"
 }
 
-// gitConfigValue runs git config --get and returns the value.
 func gitConfigValue(key string) string {
 	cmd := exec.Command("git", "config", "--get", key)
 	out, err := cmd.Output()
@@ -113,10 +106,8 @@ func gitConfigValue(key string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Logger is the package-level structured logger.
 var Logger *log.Logger
 
-// Styles — initialized in Init().
 var (
 	headerStyle    lipgloss.Style
 	phaseBoxStyle  lipgloss.Style
@@ -129,8 +120,6 @@ var (
 	phaseNameStyle lipgloss.Style
 )
 
-// Init sets up color detection, lipgloss styles, and the structured logger.
-// Call this once at CLI startup.
 func Init(noColorFlag bool) {
 	noColor := noColorFlag || os.Getenv("NO_COLOR") != ""
 
@@ -169,9 +158,8 @@ func Init(noColorFlag bool) {
 	}
 }
 
-// SanitizeTerminal resets the terminal to a sane state.
-// This fixes display corruption when the terminal was left in raw mode
-// (where \n doesn't reset cursor to column 0) by a previous process.
+// SanitizeTerminal resets the terminal to a sane state. Fixes display corruption
+// when the terminal was left in raw mode by a previous process.
 func SanitizeTerminal() {
 	// Use stty sane to reset terminal to normal cooked mode
 	cmd := exec.Command("stty", "sane")
@@ -188,8 +176,6 @@ func Red(s string) string    { return errorStyle.Render(s) }
 func Green(s string) string  { return successStyle.Render(s) }
 func Yellow(s string) string { return warningStyle.Render(s) }
 
-// Logo renders the CARD ASCII art logo to stderr.
-// Displays a playing card with C.A.R.D arranged in corners.
 func Logo() {
 	// Color styles for the logo
 	cardBorder := lipgloss.NewStyle().Foreground(lipgloss.Color("63"))
@@ -211,7 +197,6 @@ func Logo() {
 	fmt.Fprintln(os.Stderr, bottom)
 }
 
-// LogoWithTagline renders the CARD logo with a tagline underneath.
 func LogoWithTagline(tagline string) {
 	Logo()
 	if tagline != "" {
@@ -220,12 +205,10 @@ func LogoWithTagline(tagline string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// Status prints a styled status message.
 func Status(msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", phaseNameStyle.Render("▸"), msg)
 }
 
-// PhaseHeader renders a prominent CARD-branded phase banner with progress indicator.
 func PhaseHeader(phase string, index, total int, repoName, repoID string) {
 	// Reset cursor to column 0 before rendering the banner.
 	// This prevents display issues when terminal was left in raw mode
@@ -259,8 +242,6 @@ func PhaseHeader(phase string, index, total int, repoName, repoID string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// PhaseLaunch prints a styled "launching runtime" message.
-// If interactive, shows a green prompt telling the user to type "Go".
 func PhaseLaunch(phase, runtimeName string, interactive bool) {
 	display := strings.ToUpper(runtimeName)
 	if strings.TrimSpace(display) == "" {
@@ -276,13 +257,11 @@ func PhaseLaunch(phase, runtimeName string, interactive bool) {
 	}
 }
 
-// PhaseComplete prints a styled phase completion message.
 func PhaseComplete(phase string) {
 	fmt.Fprintf(os.Stderr, "%s %s phase complete\n",
 		successStyle.Render("✓"), strings.ToUpper(phase))
 }
 
-// SessionHeader prints a styled session start banner.
 func SessionHeader(id, description string) {
 	// Reset cursor to column 0 (see PhaseHeader comment)
 	fmt.Fprint(os.Stderr, "\r")
@@ -299,28 +278,23 @@ func SessionHeader(id, description string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// SessionComplete prints a styled session completion message.
 func SessionComplete(id string) {
 	fmt.Fprintf(os.Stderr, "\n%s\n",
 		successStyle.Render(fmt.Sprintf("✓ Session %s completed successfully", id)))
 }
 
-// Warning prints a styled warning message.
 func Warning(msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", warningStyle.Render("⚠"), msg)
 }
 
-// Error prints a styled error message.
 func Error(msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", errorStyle.Render("✗"), msg)
 }
 
-// Info prints a styled informational message.
 func Info(msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", phaseNameStyle.Render("▸"), msg)
 }
 
-// Table prints a formatted table with headers and rows.
 func Table(headers []string, rows [][]string) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, boldStyle.Render(strings.Join(headers, "\t")))
@@ -330,34 +304,28 @@ func Table(headers []string, rows [][]string) {
 	w.Flush()
 }
 
-// Success prints a green check with a message.
 func Success(msg string) {
 	fmt.Fprintf(os.Stderr, "%s %s\n", successStyle.Render("✓"), msg)
 }
 
-// Detail prints an indented key-value detail line.
 func Detail(key, value string) {
 	label := dimStyle.Render(fmt.Sprintf("  %s", key))
 	fmt.Fprintf(os.Stderr, "%s %s\n", label, value)
 }
 
-// KeyValue prints a bold key with a value, for structured output blocks.
 func KeyValue(key, value string) {
 	fmt.Fprintf(os.Stderr, "  %s  %s\n", boldStyle.Render(key), value)
 }
 
-// SectionHeader prints a styled section divider with a label.
 func SectionHeader(label string) {
 	line := headerStyle.Render(fmt.Sprintf("── %s ──", label))
 	fmt.Fprintf(os.Stderr, "\n%s\n\n", line)
 }
 
-// EmptyState prints a styled message for empty results.
 func EmptyState(msg string) {
 	fmt.Fprintf(os.Stderr, "  %s\n", dimStyle.Render(msg))
 }
 
-// CommandBanner renders a small CARD-branded banner for a command.
 func CommandBanner(command string, subtitle string) {
 	// Reset cursor to column 0 (see PhaseHeader comment)
 	fmt.Fprint(os.Stderr, "\r")
@@ -386,11 +354,6 @@ func CommandBanner(command string, subtitle string) {
 	fmt.Fprintln(os.Stderr)
 }
 
-// =============================================================================
-// Bubbletea-based interactive prompts
-// =============================================================================
-
-// confirmModel is a bubbletea model for y/n confirmation.
 type confirmModel struct {
 	prompt   string
 	cursor   int // 0 = yes, 1 = no
@@ -447,7 +410,6 @@ func (m confirmModel) View() string {
 		dimStyle.Render("  ←/→ to select • enter to confirm • y/n for quick select"))
 }
 
-// Confirm prompts the user with a yes/no question and returns the response.
 func Confirm(prompt string) (bool, error) {
 	m := confirmModel{prompt: prompt, cursor: 0}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
@@ -459,7 +421,6 @@ func Confirm(prompt string) (bool, error) {
 	return result.(confirmModel).accepted, nil
 }
 
-// confirmOrSelectModel is a bubbletea model for y/n/s selection.
 type confirmOrSelectModel struct {
 	prompt  string
 	cursor  int // 0 = yes, 1 = no, 2 = select
@@ -531,8 +492,6 @@ func (m confirmOrSelectModel) View() string {
 		dimStyle.Render("  ←/→ to select • enter to confirm • y/n/s for quick select"))
 }
 
-// ConfirmOrSelect prompts the user with yes/no/select options.
-// Returns "yes", "no", or "select".
 func ConfirmOrSelect(prompt string) (string, error) {
 	m := confirmOrSelectModel{prompt: prompt, cursor: 0}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
@@ -544,14 +503,12 @@ func ConfirmOrSelect(prompt string) (string, error) {
 	return result.(confirmOrSelectModel).result, nil
 }
 
-// CommitItem represents a commit for selection.
 type CommitItem struct {
 	SHA      string
 	Message  string
 	Selected bool
 }
 
-// selectCommitsModel is a bubbletea model for multi-select commit list.
 type selectCommitsModel struct {
 	repoName  string
 	commits   []CommitItem
@@ -631,8 +588,6 @@ func (m selectCommitsModel) View() string {
 	return b.String()
 }
 
-// SelectCommits displays an interactive commit selection interface.
-// Returns the indices of selected commits.
 func SelectCommits(repoName string, commits []CommitItem) ([]int, error) {
 	if len(commits) == 0 {
 		return nil, nil
@@ -663,7 +618,6 @@ func SelectCommits(repoName string, commits []CommitItem) ([]int, error) {
 	return selected, nil
 }
 
-// verifyDecisionModel is a bubbletea model for verification decision.
 type verifyDecisionModel struct {
 	cursor  int // 0 = accept, 1 = reexecute, 2 = pause
 	decided bool
@@ -752,7 +706,6 @@ func (m verifyDecisionModel) View() string {
 	return b.String()
 }
 
-// VerifyDecision renders a styled verify decision prompt.
 func VerifyDecision() (string, error) {
 	m := verifyDecisionModel{cursor: 0}
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))
@@ -764,7 +717,6 @@ func VerifyDecision() (string, error) {
 	return result.(verifyDecisionModel).result, nil
 }
 
-// ApprovalPrompt renders a styled phase approval prompt.
 func ApprovalPrompt(completedPhase, nextPhase string) (bool, error) {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "%s %s phase complete\n",
@@ -773,8 +725,6 @@ func ApprovalPrompt(completedPhase, nextPhase string) (bool, error) {
 	return Confirm(fmt.Sprintf("Proceed to %s?", nextPhase))
 }
 
-// Spinner displays an animated spinner with a message on stderr.
-// Call Stop() to clear it. Stop() is safe to call multiple times.
 type Spinner struct {
 	msg      string
 	stop     chan struct{}
@@ -782,7 +732,6 @@ type Spinner struct {
 	stopOnce sync.Once
 }
 
-// NewSpinner starts a spinner with the given message.
 func NewSpinner(msg string) *Spinner {
 	s := &Spinner{
 		msg:  msg,
@@ -818,8 +767,6 @@ func (s *Spinner) run() {
 	}
 }
 
-// Stop halts the spinner and clears its line.
-// Safe to call multiple times.
 func (s *Spinner) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stop)
@@ -827,11 +774,6 @@ func (s *Spinner) Stop() {
 	s.done.Wait()
 }
 
-// =============================================================================
-// Pensieve Animation — memory extraction intro for `card ask`
-// =============================================================================
-
-// Animation phases for the Pensieve effect
 type pensievePhase int
 
 const (
@@ -842,7 +784,6 @@ const (
 	phaseComplete                       // Static final state
 )
 
-// pensieveModel is a bubbletea model for the Pensieve intro animation.
 type pensieveModel struct {
 	phase       pensievePhase
 	frame       int
@@ -850,7 +791,6 @@ type pensieveModel struct {
 	totalFrames int
 }
 
-// tickMsg triggers the next animation frame.
 type tickMsg struct{}
 
 func pensieveTick() tea.Cmd {
@@ -1050,9 +990,6 @@ func (m pensieveModel) View() string {
 	return b.String()
 }
 
-// AnimatedWisdomBanner runs the Pensieve-style intro animation.
-// Memory is extracted from the workspace and sealed into the CARD artifact.
-// Falls back to static WisdomBanner if animation fails.
 func AnimatedWisdomBanner() {
 	m := newPensieveModel()
 	p := tea.NewProgram(m, tea.WithOutput(os.Stderr))

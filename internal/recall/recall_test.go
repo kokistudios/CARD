@@ -59,7 +59,7 @@ func TestByFiles_ExactMatch(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
 		Tags: []string{"src/auth.ts", "security"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	result, err := ByFiles(st, "repo-a", []string{"src/auth.ts"}, true, false)
@@ -81,7 +81,7 @@ func TestByFiles_DirectoryMatch(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
 		Tags: []string{"src/auth/login.ts"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	// Query for directory should match file inside it
@@ -101,7 +101,7 @@ func TestByFiles_NoMatch(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
 		Tags: []string{"src/auth.ts"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	result, err := ByFiles(st, "repo-a", []string{"src/database.ts"}, true, false)
@@ -120,12 +120,12 @@ func TestByRepo(t *testing.T) {
 	seedCapsule(t, st, capsule.Capsule{
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 	seedCapsule(t, st, capsule.Capsule{
 		ID: "cap-2", SessionID: "sess-2", RepoIDs: []string{"repo-b"}, Phase: "investigate",
 		Question: "Which DB?", Choice: "Postgres", Rationale: "JSON support",
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	result, err := ByRepo(st, "repo-a", true, false)
@@ -147,13 +147,13 @@ func TestByTags(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
 		Tags: []string{"authentication", "security"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 	seedCapsule(t, st, capsule.Capsule{
 		ID: "cap-2", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "plan",
 		Question: "Token storage?", Choice: "httpOnly cookie", Rationale: "XSS safe",
 		Tags: []string{"security", "cookies"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	// Partial match
@@ -182,7 +182,7 @@ func TestByTags_CaseInsensitive(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Q?", Choice: "A", Rationale: "R",
 		Tags: []string{"Authentication"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	result, err := ByTags(st, []string{"authentication"}, true, false)
@@ -201,7 +201,7 @@ func TestQuery_Deduplication(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
 		Tags: []string{"src/auth.ts", "authentication"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	// Query by both files and tags - should only return capsule once
@@ -237,13 +237,13 @@ func TestQuery_CrossRepoFileSearch(t *testing.T) {
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth?", Choice: "JWT", Rationale: "simpler",
 		Tags: []string{"src/auth.ts"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 	seedCapsule(t, st, capsule.Capsule{
 		ID: "cap-2", SessionID: "sess-2", RepoIDs: []string{"repo-b"}, Phase: "investigate",
 		Question: "Auth in B?", Choice: "OAuth", Rationale: "third party",
 		Tags: []string{"src/auth.ts"},
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	// Query by files WITHOUT specifying repo - should find capsules from both repos
@@ -265,12 +265,12 @@ func TestQuery_FullTextSearch(t *testing.T) {
 	seedCapsule(t, st, capsule.Capsule{
 		ID: "cap-1", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which database should we use?", Choice: "PostgreSQL", Rationale: "JSON support and TypeORM compatibility",
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 	seedCapsule(t, st, capsule.Capsule{
 		ID: "cap-2", SessionID: "sess-1", RepoIDs: []string{"repo-a"}, Phase: "investigate",
 		Question: "Which auth provider?", Choice: "Okta", Rationale: "Enterprise SSO requirements",
-		Timestamp: time.Now(),
+		CreatedAt: time.Now(),
 	})
 
 	// Search should find capsule by question text

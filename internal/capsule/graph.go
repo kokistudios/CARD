@@ -7,7 +7,6 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// GraphNode represents a node in the dependency graph.
 type GraphNode struct {
 	ID        string `json:"id"`
 	Question  string `json:"question"`
@@ -16,14 +15,12 @@ type GraphNode struct {
 	Distance  int    `json:"distance"` // Distance from root (0 = root)
 }
 
-// GraphEdge represents an edge in the dependency graph.
 type GraphEdge struct {
 	From         string `json:"from"`
 	To           string `json:"to"`
 	Relationship string `json:"relationship"` // "enables", "constrains", "supersedes"
 }
 
-// GraphResult is the result of building a dependency graph.
 type GraphResult struct {
 	Root   GraphNode   `json:"root"`
 	Nodes  []GraphNode `json:"nodes"`
@@ -33,16 +30,12 @@ type GraphResult struct {
 	Direction string   `json:"direction"`
 }
 
-// queueItem is used for BFS traversal.
 type queueItem struct {
 	id       string
 	distance int
 }
 
-// BuildGraph traverses dependency relationships from a root capsule to the specified depth.
-// direction can be "up" (traverse EnabledBy), "down" (traverse Enables/Constrains), or "both".
 func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*GraphResult, error) {
-	// Default values
 	if depth <= 0 {
 		depth = 2
 	}
@@ -50,7 +43,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 		direction = "both"
 	}
 
-	// Get root capsule
 	root, err := Get(st, rootID)
 	if err != nil {
 		return nil, fmt.Errorf("root capsule not found: %w", err)
@@ -70,15 +62,13 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 		Direction: direction,
 	}
 
-	// Get all capsules once for reverse lookups (who enables this? who constrains this?)
 	allCapsules, err := List(st, Filter{IncludeInvalidated: false})
 	if err != nil {
 		return nil, err
 	}
 
-	// Build index for reverse lookups
-	enabledByIndex := make(map[string][]string) // capsuleID -> IDs of capsules that enable it
-	constrainsIndex := make(map[string][]string) // capsuleID -> IDs of capsules that constrain it
+	enabledByIndex := make(map[string][]string)
+	constrainsIndex := make(map[string][]string)
 	for _, c := range allCapsules {
 		if c.EnabledBy != "" {
 			enabledByIndex[c.EnabledBy] = append(enabledByIndex[c.EnabledBy], c.ID)
@@ -88,7 +78,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 		}
 	}
 
-	// BFS traversal
 	visited := make(map[string]bool)
 	queue := []queueItem{{id: rootID, distance: 0}}
 
@@ -109,7 +98,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 			continue
 		}
 
-		// Add node (skip root, it's already set)
 		if item.distance > 0 {
 			result.Nodes = append(result.Nodes, GraphNode{
 				ID:        c.ID,
@@ -120,9 +108,7 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 			})
 		}
 
-		// Traverse DOWN (enables, constrains)
 		if direction == "down" || direction == "both" {
-			// This capsule enables others (forward lookup)
 			for _, enabledID := range enabledByIndex[c.ID] {
 				if !visited[enabledID] {
 					result.Edges = append(result.Edges, GraphEdge{
@@ -134,7 +120,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 				}
 			}
 
-			// This capsule constrains others (from the capsule's own Constrains field)
 			for _, constrainedID := range c.Constrains {
 				if !visited[constrainedID] {
 					result.Edges = append(result.Edges, GraphEdge{
@@ -146,7 +131,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 				}
 			}
 
-			// Supersedes relationships
 			for _, supersededID := range c.Supersedes {
 				if !visited[supersededID] {
 					result.Edges = append(result.Edges, GraphEdge{
@@ -159,9 +143,7 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 			}
 		}
 
-		// Traverse UP (enabled by, constrained by)
 		if direction == "up" || direction == "both" {
-			// This capsule is enabled by another
 			if c.EnabledBy != "" && !visited[c.EnabledBy] {
 				result.Edges = append(result.Edges, GraphEdge{
 					From:         c.EnabledBy,
@@ -171,7 +153,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 				queue = append(queue, queueItem{id: c.EnabledBy, distance: item.distance + 1})
 			}
 
-			// This capsule is constrained by others (reverse lookup)
 			for _, constrainerID := range constrainsIndex[c.ID] {
 				if !visited[constrainerID] {
 					result.Edges = append(result.Edges, GraphEdge{
@@ -183,7 +164,6 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 				}
 			}
 
-			// This capsule is superseded by another
 			if c.SupersededBy != "" && !visited[c.SupersededBy] {
 				result.Edges = append(result.Edges, GraphEdge{
 					From:         c.SupersededBy,
@@ -195,30 +175,25 @@ func BuildGraph(st *store.Store, rootID string, depth int, direction string) (*G
 		}
 	}
 
-	// Build ASCII representation
 	result.ASCII = buildASCII(result)
 
 	return result, nil
 }
 
-// buildASCII creates a simple ASCII visualization of the graph.
 func buildASCII(g *GraphResult) string {
 	var sb strings.Builder
 
-	// Group nodes by distance
 	nodesByDistance := make(map[int][]GraphNode)
 	nodesByDistance[0] = []GraphNode{g.Root}
 	for _, n := range g.Nodes {
 		nodesByDistance[n.Distance] = append(nodesByDistance[n.Distance], n)
 	}
 
-	// Build edge lookup
 	edgesFrom := make(map[string][]GraphEdge)
 	for _, e := range g.Edges {
 		edgesFrom[e.From] = append(edgesFrom[e.From], e)
 	}
 
-	// Print by level
 	for dist := 0; dist <= g.Depth; dist++ {
 		nodes := nodesByDistance[dist]
 		if len(nodes) == 0 {
@@ -229,11 +204,10 @@ func buildASCII(g *GraphResult) string {
 		for _, n := range nodes {
 			marker := "  "
 			if dist == 0 {
-				marker = "* " // Root marker
+				marker = "* "
 			}
 			sb.WriteString(fmt.Sprintf("%s[%s] %s\n", marker, truncateID(n.ID), truncateString(n.Question, 40)))
 
-			// Show edges from this node
 			for _, e := range edgesFrom[n.ID] {
 				sb.WriteString(fmt.Sprintf("    --%s--> [%s]\n", e.Relationship, truncateID(e.To)))
 			}
@@ -247,16 +221,13 @@ func buildASCII(g *GraphResult) string {
 	return sb.String()
 }
 
-// truncateID shortens a capsule ID for display.
 func truncateID(id string) string {
 	if len(id) <= 16 {
 		return id
 	}
-	// Show first 8 and last 8 chars with ellipsis
 	return id[:8] + "..." + id[len(id)-8:]
 }
 
-// truncateString shortens a string for display.
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

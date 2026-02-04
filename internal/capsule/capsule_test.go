@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kokistudios/card/internal/artifact"
 	"github.com/kokistudios/card/internal/store"
 )
 
@@ -23,159 +22,6 @@ func TestGenerateID(t *testing.T) {
 	}
 	if id1 == "" {
 		t.Error("ID should not be empty")
-	}
-}
-
-func TestExtractFromArtifact_SingleCapsule(t *testing.T) {
-	art := &artifact.Artifact{
-		Frontmatter: artifact.ArtifactMeta{
-			Session:   "sess-1",
-			Repos:     []string{"repo-abc"},
-			Phase:     "investigate",
-			Timestamp: time.Now(),
-		},
-		Body: `## Executive Summary
-
-Some content here.
-
-## Decisions
-
-### Decision: Which database to use
-- **Choice:** PostgreSQL
-- **Alternatives:** MySQL, SQLite
-- **Rationale:** Better JSON support and extensibility
-- **Tags:** database, infrastructure
-- **Source:** human
-`,
-	}
-
-	caps, err := ExtractFromArtifact(art)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(caps) != 1 {
-		t.Fatalf("expected 1 capsule, got %d", len(caps))
-	}
-
-	c := caps[0]
-	if c.Question != "Which database to use" {
-		t.Errorf("question = %q", c.Question)
-	}
-	if c.Choice != "PostgreSQL" {
-		t.Errorf("choice = %q", c.Choice)
-	}
-	if len(c.Alternatives) != 2 || c.Alternatives[0] != "MySQL" {
-		t.Errorf("alternatives = %v", c.Alternatives)
-	}
-	if c.Rationale != "Better JSON support and extensibility" {
-		t.Errorf("rationale = %q", c.Rationale)
-	}
-	if c.Source != "human" {
-		t.Errorf("source = %q", c.Source)
-	}
-	if len(c.Tags) != 2 {
-		t.Errorf("tags = %v", c.Tags)
-	}
-	if c.SessionID != "sess-1" || c.Phase != "investigate" {
-		t.Errorf("metadata not populated correctly")
-	}
-	if len(c.RepoIDs) != 1 || c.RepoIDs[0] != "repo-abc" {
-		t.Errorf("RepoIDs = %v, want [repo-abc]", c.RepoIDs)
-	}
-}
-
-func TestExtractFromArtifact_MultipleCapsules(t *testing.T) {
-	art := &artifact.Artifact{
-		Frontmatter: artifact.ArtifactMeta{
-			Session: "sess-2",
-			Repos:   []string{"repo-xyz"},
-			Phase:   "plan",
-		},
-		Body: `## Decisions
-
-### Decision: Authentication method
-- **Choice:** JWT
-- **Alternatives:** Session cookies, OAuth only
-- **Rationale:** Stateless and works for API clients
-
-### Decision: API versioning strategy
-- **Choice:** URL path versioning
-- **Alternatives:** Header versioning, query param
-- **Rationale:** Most explicit and debuggable
-- **Tags:** api, versioning
-
-## Implementation Steps
-
-Step 1...
-`,
-	}
-
-	caps, err := ExtractFromArtifact(art)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(caps) != 2 {
-		t.Fatalf("expected 2 capsules, got %d", len(caps))
-	}
-
-	if caps[0].Question != "Authentication method" {
-		t.Errorf("first question = %q", caps[0].Question)
-	}
-	if caps[1].Question != "API versioning strategy" {
-		t.Errorf("second question = %q", caps[1].Question)
-	}
-	// Source should default to "agent"
-	if caps[0].Source != "agent" {
-		t.Errorf("default source should be agent, got %q", caps[0].Source)
-	}
-}
-
-func TestExtractFromArtifact_NoCapsules(t *testing.T) {
-	art := &artifact.Artifact{
-		Frontmatter: artifact.ArtifactMeta{Session: "s", Phase: "investigate"},
-		Body:        "## Executive Summary\n\nJust a summary, no decisions.",
-	}
-
-	caps, err := ExtractFromArtifact(art)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(caps) != 0 {
-		t.Errorf("expected 0 capsules, got %d", len(caps))
-	}
-}
-
-func TestExtractFromArtifact_MissingFields(t *testing.T) {
-	art := &artifact.Artifact{
-		Frontmatter: artifact.ArtifactMeta{Session: "s", Phase: "plan"},
-		Body: `### Decision: Minimal decision
-- **Choice:** Option A
-- **Rationale:** Simple
-`,
-	}
-
-	caps, err := ExtractFromArtifact(art)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(caps) != 1 {
-		t.Fatalf("expected 1 capsule, got %d", len(caps))
-	}
-	if caps[0].Choice != "Option A" {
-		t.Errorf("choice = %q", caps[0].Choice)
-	}
-	if len(caps[0].Alternatives) != 0 {
-		t.Errorf("expected no alternatives, got %v", caps[0].Alternatives)
-	}
-	if len(caps[0].Tags) != 0 {
-		t.Errorf("expected no tags, got %v", caps[0].Tags)
-	}
-}
-
-func TestExtractFromArtifact_Nil(t *testing.T) {
-	_, err := ExtractFromArtifact(nil)
-	if err == nil {
-		t.Error("expected error for nil artifact")
 	}
 }
 
@@ -204,11 +50,11 @@ func TestStoreAndGet(t *testing.T) {
 		SessionID: "test-sess",
 		RepoIDs:   []string{"repo-1"},
 		Phase:     "investigate",
-		Timestamp: time.Now().UTC(),
+		CreatedAt: time.Now().UTC(),
 		Question:  "Which approach?",
 		Choice:    "Option B",
 		Rationale: "Simpler",
-		Source:    "agent",
+		Origin:    "agent",
 		Tags:      []string{"src/main.go"},
 	}
 
@@ -236,8 +82,8 @@ func TestStoreAndGet(t *testing.T) {
 	if got.Choice != "Option B" {
 		t.Errorf("choice = %q", got.Choice)
 	}
-	if got.Source != "agent" {
-		t.Errorf("source = %q", got.Source)
+	if got.Origin != "agent" {
+		t.Errorf("origin = %q", got.Origin)
 	}
 }
 
@@ -247,9 +93,9 @@ func TestStoreMultipleCapsules_GroupedByPhase(t *testing.T) {
 	os.MkdirAll(sessDir, 0755)
 
 	capsules := []Capsule{
-		{ID: "c1", SessionID: "test-sess", Phase: "investigate", Question: "Q1", Choice: "C1", Source: "human"},
-		{ID: "c2", SessionID: "test-sess", Phase: "plan", Question: "Q2", Choice: "C2", Source: "agent"},
-		{ID: "c3", SessionID: "test-sess", Phase: "investigate", Question: "Q3", Choice: "C3", Source: "agent"},
+		{ID: "c1", SessionID: "test-sess", Phase: "investigate", Question: "Q1", Choice: "C1", Origin: "human"},
+		{ID: "c2", SessionID: "test-sess", Phase: "plan", Question: "Q2", Choice: "C2", Origin: "agent"},
+		{ID: "c3", SessionID: "test-sess", Phase: "investigate", Question: "Q3", Choice: "C3", Origin: "agent"},
 	}
 	for _, c := range capsules {
 		if err := Store(st, c); err != nil {

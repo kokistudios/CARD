@@ -18,7 +18,6 @@ const (
 	codexSignalGracePeriod  = 2 * time.Second
 )
 
-// CodexRuntime implements the Runtime interface for Codex CLI.
 type CodexRuntime struct {
 	Path string
 }
@@ -267,9 +266,8 @@ func codexHandleProcessExit(err error) error {
 	return fmt.Errorf("failed to run codex: %w", err)
 }
 
-// codexResetTerminal resets the terminal to a sane state after Codex exits.
-// This fixes display corruption where lipgloss boxes render incorrectly because
-// the terminal was left in raw mode (where \n doesn't reset cursor to column 0).
+// codexResetTerminal resets the terminal to a sane state after Codex exits. Codex can
+// leave the terminal in raw mode where \n doesn't reset cursor to column 0.
 func codexResetTerminal() {
 	// Use stty sane to reset terminal to normal cooked mode
 	cmd := exec.Command("stty", "sane")

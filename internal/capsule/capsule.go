@@ -13,19 +13,15 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/kokistudios/card/internal/artifact"
 	"github.com/kokistudios/card/internal/store"
 )
 
-// CapsuleStatus represents the state of a capsule.
-// Capsules are active by default (empty status). Only invalidated capsules have a status set.
 type CapsuleStatus string
 
 const (
 	StatusInvalidated CapsuleStatus = "invalidated" // Superseded or proven wrong
 )
 
-// CapsuleType distinguishes decisions from findings.
 type CapsuleType string
 
 const (
@@ -34,7 +30,6 @@ const (
 )
 
 
-// Confirmation indicates how the decision was confirmed.
 type Confirmation string
 
 const (
@@ -42,7 +37,6 @@ const (
 	ConfirmationImplicit Confirmation = "implicit" // Stored immediately without human confirmation
 )
 
-// Challenge records when a capsule's validity was questioned.
 type Challenge struct {
 	Timestamp  time.Time `yaml:"timestamp"`
 	SessionID  string    `yaml:"session_id"`
@@ -51,50 +45,40 @@ type Challenge struct {
 	Resolution string    `yaml:"resolution"`         // "verified", "invalidated", "superseded", "pending"
 }
 
-// Capsule represents a single decision or finding captured during a CARD phase.
 type Capsule struct {
-	ID           string    `yaml:"id"`
-	SessionID    string    `yaml:"session"`
-	RepoIDs      []string  `yaml:"repos,omitempty"`
-	Phase        string    `yaml:"phase"`
-	Timestamp    time.Time `yaml:"timestamp"`
-	Question     string    `yaml:"question"`
-	Choice       string    `yaml:"choice"`
-	Alternatives []string  `yaml:"alternatives,omitempty"`
-	Rationale    string    `yaml:"rationale"`
-	Source       string    `yaml:"source,omitempty"` // "human" or "agent" (legacy, use Origin)
-	Tags         []string  `yaml:"tags,omitempty"`
-	Commits      []string  `yaml:"commits,omitempty"`
+	ID           string   `yaml:"id"`
+	SessionID    string   `yaml:"session"`
+	RepoIDs      []string `yaml:"repos,omitempty"`
+	Phase        string   `yaml:"phase"`
+	Question     string   `yaml:"question"`
+	Choice       string   `yaml:"choice"`
+	Alternatives []string `yaml:"alternatives,omitempty"`
+	Rationale    string   `yaml:"rationale"`
+	Tags         []string `yaml:"tags,omitempty"`
+	Commits      []string `yaml:"commits,omitempty"`
 
-	// Status and type (PENSIEVE enhancement)
 	Status CapsuleStatus `yaml:"status,omitempty"`
 	Type   CapsuleType   `yaml:"type,omitempty"`
 
-	// Decision system redesign fields
-	PatternID    string `yaml:"pattern_id,omitempty"` // Links to pattern this established/follows
-	Origin        string       `yaml:"origin,omitempty"`        // "human" or "agent" (replaces Source)
-	Confirmation  Confirmation `yaml:"confirmation,omitempty"`  // explicit, implicit
-	CreatedAt     time.Time    `yaml:"created_at,omitempty"`    // When capsule was created (for temporal queries)
+	PatternID     string       `yaml:"pattern_id,omitempty"`
+	Origin        string       `yaml:"origin,omitempty"`         // "human" or "agent"
+	Confirmation  Confirmation `yaml:"confirmation,omitempty"`   // explicit, implicit
+	CreatedAt     time.Time    `yaml:"created_at,omitempty"`     // When capsule was created
 	InvalidatedAt *time.Time   `yaml:"invalidated_at,omitempty"` // When capsule was invalidated
 
-	// Dependency graph
-	Enables    []string `yaml:"enables,omitempty"`    // Capsule IDs this decision enables
-	EnabledBy  string   `yaml:"enabled_by,omitempty"` // Capsule ID that enabled this decision
-	Constrains []string `yaml:"constrains,omitempty"` // Capsule IDs whose choices this limits
+	Enables    []string `yaml:"enables,omitempty"`
+	EnabledBy  string   `yaml:"enabled_by,omitempty"`
+	Constrains []string `yaml:"constrains,omitempty"`
 
-	// Supersession relationships
-	SupersededBy string   `yaml:"superseded_by,omitempty"` // Capsule ID that replaces this
-	Supersedes   []string `yaml:"supersedes,omitempty"`    // Capsule IDs this replaces
+	SupersededBy string   `yaml:"superseded_by,omitempty"`
+	Supersedes   []string `yaml:"supersedes,omitempty"`
 
-	// Invalidation metadata
-	InvalidationReason string `yaml:"invalidation_reason,omitempty"` // Why this decision was invalidated
-	Learned            string `yaml:"learned,omitempty"`             // Insight gained from invalidation
+	InvalidationReason string `yaml:"invalidation_reason,omitempty"`
+	Learned            string `yaml:"learned,omitempty"`
 
-	// Challenge history
 	Challenges []Challenge `yaml:"challenges,omitempty"`
 }
 
-// Filter defines query parameters for listing capsules.
 type Filter struct {
 	SessionID          *string
 	RepoID             *string       // matches against any entry in RepoIDs
@@ -107,97 +91,12 @@ type Filter struct {
 	ShowEvolution      bool          // if false (default), deduplicate to latest phase per question
 }
 
-// GenerateID creates a deterministic capsule ID from session, phase, and question.
 func GenerateID(sessionID, phase, question string) string {
 	h := sha256.Sum256([]byte(question))
 	shortHash := fmt.Sprintf("%x", h[:4])
 	return fmt.Sprintf("%s-%s-%s", sessionID, phase, shortHash)
 }
 
-// ExtractFromArtifact parses decision capsules from an artifact's markdown body.
-//
-// DEPRECATED: This function implements the legacy "document → extract" model.
-// New decisions should be captured using the card_decision MCP tool, which stores
-// capsules immediately without requiring post-phase extraction.
-// This function is retained for backward compatibility with older sessions that
-// used the "### Decision:" markdown format in artifacts.
-func ExtractFromArtifact(art *artifact.Artifact) ([]Capsule, error) {
-	if art == nil {
-		return nil, fmt.Errorf("artifact is nil")
-	}
-
-	body := art.Body
-	var capsules []Capsule
-
-	// Match "### Decision: <question>" headers
-	decisionRe := regexp.MustCompile(`(?mi)^###\s+Decision:\s*(.+)$`)
-	matches := decisionRe.FindAllStringSubmatchIndex(body, -1)
-
-	for i, match := range matches {
-		question := strings.TrimSpace(body[match[2]:match[3]])
-
-		// Extract the block between this header and the next ### or ## or EOF
-		blockStart := match[1]
-		var blockEnd int
-		if i+1 < len(matches) {
-			blockEnd = matches[i+1][0]
-		} else {
-			nextHeader := regexp.MustCompile(`(?m)^##[^#]`)
-			loc := nextHeader.FindStringIndex(body[blockStart:])
-			if loc != nil {
-				blockEnd = blockStart + loc[0]
-			} else {
-				blockEnd = len(body)
-			}
-		}
-
-		block := body[blockStart:blockEnd]
-
-		c := Capsule{
-			SessionID: art.Frontmatter.Session,
-			RepoIDs:   art.Frontmatter.Repos,
-			Phase:     art.Frontmatter.Phase,
-			Timestamp: art.Frontmatter.Timestamp,
-			Question:  question,
-			Choice:    extractField(block, "Choice"),
-			Rationale: extractField(block, "Rationale"),
-			Source:    extractField(block, "Source"),
-			Tags:      splitCSV(extractField(block, "Tags")),
-		}
-
-		alts := extractField(block, "Alternatives")
-		if alts != "" {
-			c.Alternatives = splitCSV(alts)
-		}
-
-		if c.Source == "" {
-			c.Source = "agent"
-		}
-
-		// Parse status (empty = active, only "invalidated" is meaningful)
-		statusStr := extractField(block, "Status")
-		if statusStr != "" {
-			c.Status = CapsuleStatus(strings.ToLower(statusStr))
-		}
-
-		// Parse type (infer from alternatives: has alternatives = decision, no alternatives = finding)
-		typeStr := extractField(block, "Type")
-		if typeStr != "" {
-			c.Type = CapsuleType(strings.ToLower(typeStr))
-		} else if len(c.Alternatives) > 0 {
-			c.Type = TypeDecision
-		} else {
-			c.Type = TypeFinding
-		}
-
-		c.ID = GenerateID(c.SessionID, c.Phase, c.Question)
-		capsules = append(capsules, c)
-	}
-
-	return capsules, nil
-}
-
-// extractField pulls the value from a "- **Label:** value" line.
 func extractField(block, label string) string {
 	re := regexp.MustCompile(`(?mi)[-*]\s*\*\*` + regexp.QuoteMeta(label) + `:\*\*\s*(.+)$`)
 	m := re.FindStringSubmatch(block)
@@ -207,8 +106,6 @@ func extractField(block, label string) string {
 	return strings.TrimSpace(m[1])
 }
 
-// splitCSV splits a comma-separated string into trimmed parts.
-// Also strips backticks which may be present from markdown formatting.
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -217,7 +114,7 @@ func splitCSV(s string) []string {
 	var result []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		p = strings.Trim(p, "`") // Strip backticks from markdown
+		p = strings.Trim(p, "`")
 		if p != "" {
 			result = append(result, p)
 		}
@@ -225,20 +122,15 @@ func splitCSV(s string) []string {
 	return result
 }
 
-// capsulesFilePath returns the path to the consolidated capsules.md for a session.
 func capsulesFilePath(st *store.Store, sessionID string) string {
 	return st.Path("sessions", sessionID, "capsules.md")
 }
 
-// Store writes a capsule to the consolidated capsules.md file for its session.
-// If the file already exists, the capsule is appended (or replaced if same ID).
 func Store(st *store.Store, c Capsule) error {
 	p := capsulesFilePath(st, c.SessionID)
 
-	// Load existing capsules from the file
 	existing, _ := loadConsolidatedFile(p)
 
-	// Replace or append
 	found := false
 	for i, ec := range existing {
 		if ec.ID == c.ID {
@@ -254,13 +146,11 @@ func Store(st *store.Store, c Capsule) error {
 	return writeConsolidatedFile(p, c.SessionID, existing)
 }
 
-// writeConsolidatedFile writes all capsules to a single markdown file grouped by phase.
 func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
-	// Group by phase (includes all session phases + ask for ask sessions)
 	phaseOrder := []string{"ask", "investigate", "investigating", "plan", "planning", "review", "reviewing", "execute", "executing", "verify", "verifying", "simplify", "simplifying", "record", "recording", "conclude"}
 	byPhase := make(map[string][]Capsule)
 	for _, c := range capsules {
@@ -291,13 +181,8 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 				fmt.Fprintf(&buf, "- **Alternatives:** %s\n", strings.Join(c.Alternatives, ", "))
 			}
 			fmt.Fprintf(&buf, "- **Rationale:** %s\n", c.Rationale)
-			// Write Origin if set, otherwise fall back to Source for backwards compatibility
-			origin := c.Origin
-			if origin == "" {
-				origin = c.Source
-			}
-			if origin != "" {
-				fmt.Fprintf(&buf, "- **Origin:** %s\n", origin)
+			if c.Origin != "" {
+				fmt.Fprintf(&buf, "- **Origin:** %s\n", c.Origin)
 			}
 			if c.Status != "" {
 				fmt.Fprintf(&buf, "- **Status:** %s\n", c.Status)
@@ -305,7 +190,6 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 			if c.Type != "" {
 				fmt.Fprintf(&buf, "- **Type:** %s\n", c.Type)
 			}
-			// New decision system redesign fields
 			if c.Confirmation != "" {
 				fmt.Fprintf(&buf, "- **Confirmation:** %s\n", c.Confirmation)
 			}
@@ -314,9 +198,6 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 			}
 			if len(c.Tags) > 0 {
 				fmt.Fprintf(&buf, "- **Tags:** %s\n", strings.Join(c.Tags, ", "))
-			}
-			if !c.Timestamp.IsZero() {
-				fmt.Fprintf(&buf, "- **Timestamp:** %s\n", c.Timestamp.Format(time.RFC3339))
 			}
 			if !c.CreatedAt.IsZero() {
 				fmt.Fprintf(&buf, "- **CreatedAt:** %s\n", c.CreatedAt.Format(time.RFC3339))
@@ -330,7 +211,6 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 			if len(c.Commits) > 0 {
 				fmt.Fprintf(&buf, "- **Commits:** %s\n", strings.Join(c.Commits, ", "))
 			}
-			// Dependency graph
 			if c.EnabledBy != "" {
 				fmt.Fprintf(&buf, "- **EnabledBy:** %s\n", c.EnabledBy)
 			}
@@ -340,14 +220,12 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 			if len(c.Constrains) > 0 {
 				fmt.Fprintf(&buf, "- **Constrains:** %s\n", strings.Join(c.Constrains, ", "))
 			}
-			// Supersession
 			if c.SupersededBy != "" {
 				fmt.Fprintf(&buf, "- **SupersededBy:** %s\n", c.SupersededBy)
 			}
 			if len(c.Supersedes) > 0 {
 				fmt.Fprintf(&buf, "- **Supersedes:** %s\n", strings.Join(c.Supersedes, ", "))
 			}
-			// Invalidation metadata
 			if c.InvalidationReason != "" {
 				fmt.Fprintf(&buf, "- **InvalidationReason:** %s\n", c.InvalidationReason)
 			}
@@ -361,7 +239,6 @@ func writeConsolidatedFile(path, sessionID string, capsules []Capsule) error {
 	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
-// loadConsolidatedFile parses all capsules from a consolidated capsules.md file.
 func loadConsolidatedFile(path string) ([]Capsule, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -370,11 +247,9 @@ func loadConsolidatedFile(path string) ([]Capsule, error) {
 	return parseConsolidatedCapsules(string(data))
 }
 
-// parseConsolidatedCapsules extracts capsules from the consolidated markdown format.
 func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 	var capsules []Capsule
 
-	// Extract session ID from frontmatter
 	sessionID := ""
 	if strings.HasPrefix(strings.TrimSpace(content), "---") {
 		rest := strings.TrimSpace(content)[3:]
@@ -390,11 +265,9 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 		}
 	}
 
-	// Find phase headers (## phase)
 	phaseRe := regexp.MustCompile(`(?m)^## (\w+)\s*$`)
 	phaseMatches := phaseRe.FindAllStringSubmatchIndex(content, -1)
 
-	// Find decision headers (### Decision: question)
 	decisionRe := regexp.MustCompile(`(?mi)^### Decision:\s*(.+)$`)
 
 	for pi, pm := range phaseMatches {
@@ -427,7 +300,7 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				ID:        extractField(decBlock, "ID"),
 				Choice:    extractField(decBlock, "Choice"),
 				Rationale: extractField(decBlock, "Rationale"),
-				Source:    extractField(decBlock, "Source"),
+				Origin:    extractField(decBlock, "Origin"),
 				RepoIDs:   splitCSV(extractField(decBlock, "Repos")),
 				Tags:      splitCSV(extractField(decBlock, "Tags")),
 			}
@@ -442,20 +315,11 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				c.Commits = splitCSV(commits)
 			}
 
-			ts := extractField(decBlock, "Timestamp")
-			if ts != "" {
-				if t, err := time.Parse(time.RFC3339, ts); err == nil {
-					c.Timestamp = t
-				}
-			}
-
-			// Parse status (empty = active, only "invalidated" is meaningful)
 			statusStr := extractField(decBlock, "Status")
 			if statusStr != "" {
 				c.Status = CapsuleStatus(strings.ToLower(statusStr))
 			}
 
-			// Parse type
 			typeStr := extractField(decBlock, "Type")
 			if typeStr != "" {
 				c.Type = CapsuleType(strings.ToLower(typeStr))
@@ -465,34 +329,20 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				c.Type = TypeFinding
 			}
 
-			// Parse new decision system redesign fields
-			// Origin (replaces Source, but read both for backwards compatibility)
-			c.Origin = extractField(decBlock, "Origin")
-			if c.Origin == "" && c.Source != "" {
-				c.Origin = c.Source // Migrate Source to Origin
-			}
-
-			// Confirmation (default to implicit for backwards compatibility)
 			confStr := extractField(decBlock, "Confirmation")
 			if confStr != "" {
 				c.Confirmation = Confirmation(strings.ToLower(confStr))
-			} else {
-				c.Confirmation = ConfirmationImplicit // Default for legacy capsules
 			}
 
 			c.PatternID = extractField(decBlock, "PatternID")
 
-			// Parse CreatedAt (fall back to Timestamp if not set)
 			createdAtStr := extractField(decBlock, "CreatedAt")
 			if createdAtStr != "" {
 				if t, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
 					c.CreatedAt = t
 				}
-			} else if !c.Timestamp.IsZero() {
-				c.CreatedAt = c.Timestamp // Migrate Timestamp to CreatedAt
 			}
 
-			// Parse InvalidatedAt
 			invalidatedAtStr := extractField(decBlock, "InvalidatedAt")
 			if invalidatedAtStr != "" {
 				if t, err := time.Parse(time.RFC3339, invalidatedAtStr); err == nil {
@@ -500,7 +350,6 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				}
 			}
 
-			// Dependency graph
 			c.EnabledBy = extractField(decBlock, "EnabledBy")
 			enables := extractField(decBlock, "Enables")
 			if enables != "" {
@@ -511,25 +360,17 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 				c.Constrains = splitCSV(constrains)
 			}
 
-			// Parse supersession relationships
 			c.SupersededBy = extractField(decBlock, "SupersededBy")
 			supersedes := extractField(decBlock, "Supersedes")
 			if supersedes != "" {
 				c.Supersedes = splitCSV(supersedes)
 			}
 
-			// Invalidation metadata
 			c.InvalidationReason = extractField(decBlock, "InvalidationReason")
 			c.Learned = extractField(decBlock, "Learned")
 
 			if c.ID == "" {
 				c.ID = GenerateID(sessionID, phase, question)
-			}
-			if c.Source == "" {
-				c.Source = "agent"
-			}
-			if c.Origin == "" {
-				c.Origin = "agent"
 			}
 
 			capsules = append(capsules, c)
@@ -539,7 +380,6 @@ func parseConsolidatedCapsules(content string) ([]Capsule, error) {
 	return capsules, nil
 }
 
-// Get retrieves a single capsule by ID, searching across all sessions.
 func Get(st *store.Store, id string) (*Capsule, error) {
 	sessionsDir := st.Path("sessions")
 	entries, err := os.ReadDir(sessionsDir)
@@ -551,7 +391,6 @@ func Get(st *store.Store, id string) (*Capsule, error) {
 		if !e.IsDir() {
 			continue
 		}
-		// Try consolidated file
 		p := capsulesFilePath(st, e.Name())
 		caps, err := loadConsolidatedFile(p)
 		if err == nil {
@@ -565,7 +404,6 @@ func Get(st *store.Store, id string) (*Capsule, error) {
 	return nil, fmt.Errorf("capsule not found: %s", id)
 }
 
-// phaseRank returns a numeric rank for phase ordering (higher = later in pipeline).
 func phaseRank(phase string) int {
 	ranks := map[string]int{
 		"ask":         0, // Decisions recorded during card ask
@@ -583,9 +421,7 @@ func phaseRank(phase string) int {
 	return 0
 }
 
-// deduplicateToLatestPhase keeps only the latest-phase capsule per question within each session.
 func deduplicateToLatestPhase(capsules []Capsule) []Capsule {
-	// Key: sessionID + question
 	type key struct {
 		session  string
 		question string
@@ -607,7 +443,6 @@ func deduplicateToLatestPhase(capsules []Capsule) []Capsule {
 	return result
 }
 
-// List returns capsules matching the given filter.
 func List(st *store.Store, f Filter) ([]Capsule, error) {
 	sessionsDir := st.Path("sessions")
 	entries, err := os.ReadDir(sessionsDir)
@@ -625,7 +460,6 @@ func List(st *store.Store, f Filter) ([]Capsule, error) {
 			continue
 		}
 
-		// Load from consolidated file
 		p := capsulesFilePath(st, e.Name())
 		caps, err := loadConsolidatedFile(p)
 		if err != nil {
@@ -639,7 +473,6 @@ func List(st *store.Store, f Filter) ([]Capsule, error) {
 		}
 	}
 
-	// Deduplicate to latest phase unless ShowEvolution is true
 	if !f.ShowEvolution {
 		result = deduplicateToLatestPhase(result)
 	}
@@ -647,7 +480,6 @@ func List(st *store.Store, f Filter) ([]Capsule, error) {
 	return result, nil
 }
 
-// ListTags returns all unique tags from all capsules, sorted alphabetically.
 func ListTags(st *store.Store) ([]string, error) {
 	caps, err := List(st, Filter{ShowEvolution: true})
 	if err != nil {
@@ -669,116 +501,6 @@ func ListTags(st *store.Store) ([]string, error) {
 	return tags, nil
 }
 
-// BacktickIssue represents a session with backticks in capsule tags.
-type BacktickIssue struct {
-	SessionID string
-	FilePath  string
-	Count     int // Number of backtick-wrapped tags found
-}
-
-// CheckBackticksInTags scans all capsule files for tags containing backticks.
-// Checks the raw file content since splitCSV strips backticks during parsing.
-func CheckBackticksInTags(st *store.Store) ([]BacktickIssue, error) {
-	sessionsDir := st.Path("sessions")
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read sessions: %w", err)
-	}
-
-	// Pattern matches tags line with backtick-wrapped values: - **Tags:** `foo`, `bar`
-	tagLineRe := regexp.MustCompile(`(?m)^- \*\*Tags:\*\*\s+(.+)$`)
-	backtickRe := regexp.MustCompile("`[^`]+`")
-
-	var issues []BacktickIssue
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-
-		p := capsulesFilePath(st, e.Name())
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-
-		content := string(data)
-		matches := tagLineRe.FindAllStringSubmatch(content, -1)
-
-		backtickCount := 0
-		for _, m := range matches {
-			if len(m) > 1 {
-				backtickCount += len(backtickRe.FindAllString(m[1], -1))
-			}
-		}
-
-		if backtickCount > 0 {
-			issues = append(issues, BacktickIssue{
-				SessionID: e.Name(),
-				FilePath:  p,
-				Count:     backtickCount,
-			})
-		}
-	}
-
-	return issues, nil
-}
-
-// FixBackticksInTags removes backticks from all capsule tags in the raw files.
-// Returns the number of sessions fixed.
-func FixBackticksInTags(st *store.Store) (int, error) {
-	sessionsDir := st.Path("sessions")
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read sessions: %w", err)
-	}
-
-	// Pattern matches tags line: - **Tags:** `foo`, `bar`
-	tagLineRe := regexp.MustCompile(`(?m)^(- \*\*Tags:\*\*\s+)(.+)$`)
-
-	totalFixed := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-
-		p := capsulesFilePath(st, e.Name())
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-
-		content := string(data)
-		original := content
-
-		// Replace each tags line, stripping backticks from values
-		content = tagLineRe.ReplaceAllStringFunc(content, func(line string) string {
-			m := tagLineRe.FindStringSubmatch(line)
-			if len(m) < 3 {
-				return line
-			}
-			prefix := m[1]
-			tagsValue := m[2]
-
-			// Strip backticks from each tag value
-			// Match `value` and replace with just value
-			backtickRe := regexp.MustCompile("`([^`]+)`")
-			cleanedTags := backtickRe.ReplaceAllString(tagsValue, "$1")
-
-			return prefix + cleanedTags
-		})
-
-		if content != original {
-			if err := os.WriteFile(p, []byte(content), 0644); err != nil {
-				return totalFixed, fmt.Errorf("failed to write session %s: %w", e.Name(), err)
-			}
-			totalFixed++
-		}
-	}
-
-	return totalFixed, nil
-}
-
-// LinkCommits updates a capsule with commit SHAs.
 func LinkCommits(st *store.Store, id string, commits []string) error {
 	c, err := Get(st, id)
 	if err != nil {
@@ -788,8 +510,6 @@ func LinkCommits(st *store.Store, id string, commits []string) error {
 	return Store(st, *c)
 }
 
-// LinkCommitsForSession bulk-links commits to all capsules in a session.
-// Returns the count of capsules updated.
 func LinkCommitsForSession(st *store.Store, sessionID string, commits []string) (int, error) {
 	p := capsulesFilePath(st, sessionID)
 	capsules, err := loadConsolidatedFile(p)
@@ -833,7 +553,6 @@ func matchesFilter(c *Capsule, f Filter) bool {
 	if f.Type != nil && c.Type != *f.Type {
 		return false
 	}
-	// Exclude invalidated capsules unless explicitly requested
 	if !f.IncludeInvalidated && c.Status == StatusInvalidated {
 		return false
 	}
@@ -865,8 +584,6 @@ func matchesFilter(c *Capsule, f Filter) bool {
 }
 
 
-// Invalidate marks a capsule as invalidated and optionally links to its replacement.
-// The learned parameter captures what was learned from the invalidation (distinct from reason).
 func Invalidate(st *store.Store, id, reason, learned, supersededBy string) error {
 	c, err := Get(st, id)
 	if err != nil {
@@ -880,10 +597,8 @@ func Invalidate(st *store.Store, id, reason, learned, supersededBy string) error
 	if supersededBy != "" {
 		c.SupersededBy = supersededBy
 
-		// Also update the superseding capsule to reference this one
 		newC, err := Get(st, supersededBy)
 		if err == nil {
-			// Append to Supersedes if not already present
 			found := false
 			for _, s := range newC.Supersedes {
 				if s == id {
@@ -898,7 +613,6 @@ func Invalidate(st *store.Store, id, reason, learned, supersededBy string) error
 		}
 	}
 
-	// Add a challenge record
 	c.Challenges = append(c.Challenges, Challenge{
 		Timestamp:  time.Now().UTC(),
 		SessionID:  c.SessionID, // Could be overridden if we know the invalidating session
@@ -910,7 +624,6 @@ func Invalidate(st *store.Store, id, reason, learned, supersededBy string) error
 	return Store(st, *c)
 }
 
-// AddChallenge adds a challenge record to a capsule without changing its status.
 func AddChallenge(st *store.Store, id string, challenge Challenge) error {
 	c, err := Get(st, id)
 	if err != nil {
@@ -920,14 +633,12 @@ func AddChallenge(st *store.Store, id string, challenge Challenge) error {
 	return Store(st, *c)
 }
 
-// ChainResult represents the supersession chain for a capsule.
 type ChainResult struct {
 	Current      *Capsule
 	Supersedes   []Capsule // Capsules this one replaces (older)
 	SupersededBy *Capsule  // Capsule that replaced this one (newer)
 }
 
-// GetChain returns the supersession chain for a capsule.
 func GetChain(st *store.Store, id string) (*ChainResult, error) {
 	c, err := Get(st, id)
 	if err != nil {
@@ -936,14 +647,12 @@ func GetChain(st *store.Store, id string) (*ChainResult, error) {
 
 	result := &ChainResult{Current: c}
 
-	// Follow SupersededBy chain upward (to newer)
 	if c.SupersededBy != "" {
 		if newer, err := Get(st, c.SupersededBy); err == nil {
 			result.SupersededBy = newer
 		}
 	}
 
-	// Follow Supersedes chain downward (to older)
 	for _, oldID := range c.Supersedes {
 		if older, err := Get(st, oldID); err == nil {
 			result.Supersedes = append(result.Supersedes, *older)
@@ -953,7 +662,6 @@ func GetChain(st *store.Store, id string) (*ChainResult, error) {
 	return result, nil
 }
 
-// Label returns a human-readable label for display.
 func (s CapsuleStatus) Label() string {
 	if s == StatusInvalidated {
 		return "[invalidated]"
@@ -961,35 +669,28 @@ func (s CapsuleStatus) Label() string {
 	return "" // Active capsules have no label
 }
 
-// IsActive returns true if this capsule is active (not invalidated).
 func (s CapsuleStatus) IsActive() bool {
 	return s != StatusInvalidated
 }
 
-// EnrichTagsFromManifest adds file: tags from a milestone_ledger file manifest.
-// This ensures capsules are discoverable by file path even if not explicitly tagged.
 func EnrichTagsFromManifest(st *store.Store, sessionID string) (int, error) {
-	// Read milestone_ledger.md
 	ledgerPath := st.Path("sessions", sessionID, "milestone_ledger.md")
 	content, err := os.ReadFile(ledgerPath)
 	if err != nil {
 		return 0, nil // No ledger yet, not an error
 	}
 
-	// Extract file paths from the manifest section
 	filePaths := extractFilePathsFromLedger(string(content))
 	if len(filePaths) == 0 {
 		return 0, nil
 	}
 
-	// Load capsules for this session
 	capsulesPath := capsulesFilePath(st, sessionID)
 	capsules, err := loadConsolidatedFile(capsulesPath)
 	if err != nil {
 		return 0, nil
 	}
 
-	// Add file tags to each capsule
 	updated := 0
 	for i := range capsules {
 		existingTags := make(map[string]bool)
@@ -1020,7 +721,6 @@ func EnrichTagsFromManifest(st *store.Store, sessionID string) (int, error) {
 	return updated, nil
 }
 
-// extractFilePathsFromLedger parses file paths from the File Manifest section of a milestone_ledger.
 func extractFilePathsFromLedger(content string) []string {
 	var paths []string
 	lines := strings.Split(content, "\n")
@@ -1029,13 +729,11 @@ func extractFilePathsFromLedger(content string) []string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Check for file manifest section header
 		if strings.HasPrefix(trimmed, "## ") && strings.Contains(strings.ToLower(trimmed), "file") && strings.Contains(strings.ToLower(trimmed), "manifest") {
 			inManifestSection = true
 			continue
 		}
 
-		// Exit manifest section on next ## header
 		if strings.HasPrefix(trimmed, "## ") && inManifestSection {
 			break
 		}
@@ -1044,13 +742,11 @@ func extractFilePathsFromLedger(content string) []string {
 			continue
 		}
 
-		// Parse file entries (- path/to/file or - `path/to/file`)
 		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
 			entry := strings.TrimPrefix(trimmed, "- ")
 			entry = strings.TrimPrefix(entry, "* ")
 			entry = strings.Trim(entry, "`")
 
-			// Extract just the path (may have annotations like ": description")
 			if idx := strings.Index(entry, ":"); idx > 0 {
 				entry = strings.TrimSpace(entry[:idx])
 			}
@@ -1058,7 +754,6 @@ func extractFilePathsFromLedger(content string) []string {
 				entry = strings.TrimSpace(entry[:idx])
 			}
 
-			// Validate it looks like a file path
 			if strings.Contains(entry, "/") || strings.Contains(entry, ".") {
 				entry = strings.Trim(entry, "`")
 				if entry != "" {

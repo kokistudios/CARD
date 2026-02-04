@@ -5,7 +5,6 @@ import (
 	"strings"
 )
 
-// InvalidationIntent represents a detected intent to invalidate a prior decision.
 type InvalidationIntent struct {
 	Detected        bool
 	Confidence      string // "high", "medium", "low"
@@ -14,14 +13,11 @@ type InvalidationIntent struct {
 	CapsuleID       string // If we can identify the specific capsule
 }
 
-// invalidationPatterns are regex patterns that suggest invalidation intent.
-// Ordered from high confidence to low confidence.
 var invalidationPatterns = []struct {
 	pattern    *regexp.Regexp
 	confidence string
 	action     string
 }{
-	// High confidence - explicit invalidation language
 	{
 		regexp.MustCompile(`(?i)\b(this|that|the previous|earlier|old)\s+(decision|approach|choice|implementation)\s+(was|is)\s+(wrong|incorrect|bad|flawed|mistaken)`),
 		"high",
@@ -52,8 +48,6 @@ var invalidationPatterns = []struct {
 		"high",
 		"invalidate_and_supersede",
 	},
-
-	// Medium confidence - reversal language
 	{
 		regexp.MustCompile(`(?i)\b(revert|undo|rollback|go\s+back\s+to|switch\s+back)\b`),
 		"medium",
@@ -84,8 +78,6 @@ var invalidationPatterns = []struct {
 		"medium",
 		"challenge_or_invalidate",
 	},
-
-	// Low confidence - questioning language (might just be discussion)
 	{
 		regexp.MustCompile(`(?i)\bwhy\s+did\s+we\s+(choose|pick|select|use)`),
 		"low",
@@ -103,7 +95,6 @@ var invalidationPatterns = []struct {
 	},
 }
 
-// DetectInvalidationIntent analyzes text for intent to invalidate prior decisions.
 func DetectInvalidationIntent(text string) *InvalidationIntent {
 	text = strings.ToLower(text)
 
@@ -123,7 +114,6 @@ func DetectInvalidationIntent(text string) *InvalidationIntent {
 	}
 }
 
-// DetectInvalidationIntentWithContext analyzes text with awareness of capsule context.
 func DetectInvalidationIntentWithContext(text string, referencedCapsuleID string) *InvalidationIntent {
 	intent := DetectInvalidationIntent(text)
 	if intent.Detected && referencedCapsuleID != "" {
@@ -132,7 +122,6 @@ func DetectInvalidationIntentWithContext(text string, referencedCapsuleID string
 	return intent
 }
 
-// InvalidationPrompt returns a confirmation prompt for the detected intent.
 func (i *InvalidationIntent) InvalidationPrompt() string {
 	if !i.Detected {
 		return ""
@@ -156,7 +145,6 @@ func (i *InvalidationIntent) InvalidationPrompt() string {
 	return ""
 }
 
-// ActionDescription returns a human-readable description of the suggested action.
 func (i *InvalidationIntent) ActionDescription() string {
 	switch i.SuggestedAction {
 	case "invalidate_and_supersede":
@@ -170,7 +158,6 @@ func (i *InvalidationIntent) ActionDescription() string {
 	}
 }
 
-// ConfidenceLevel returns a numeric confidence level (0-100) for sorting/comparison.
 func (i *InvalidationIntent) ConfidenceLevel() int {
 	switch i.Confidence {
 	case "high":
@@ -184,18 +171,13 @@ func (i *InvalidationIntent) ConfidenceLevel() int {
 	}
 }
 
-// ExtractCapsuleReferences attempts to find capsule ID references in text.
-// Looks for patterns like "decision abc123", "capsule xyz789", or direct IDs.
 func ExtractCapsuleReferences(text string) []string {
 	var refs []string
 
-	// Pattern: explicit capsule/decision ID mention
-	// CARD capsule IDs look like: 20260130-add-auth-abc123-investigate-ab12cd34
 	idPattern := regexp.MustCompile(`\b(\d{8}-[a-z0-9-]+-[a-f0-9]{8})\b`)
 	matches := idPattern.FindAllString(text, -1)
 	refs = append(refs, matches...)
 
-	// Pattern: "decision <id>" or "capsule <id>" - ID must be alphanumeric with hyphens
 	decisionPattern := regexp.MustCompile(`(?i)\b(?:decision|capsule)\s+([a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9])`)
 	decMatches := decisionPattern.FindAllStringSubmatch(text, -1)
 	for _, m := range decMatches {
@@ -204,7 +186,6 @@ func ExtractCapsuleReferences(text string) []string {
 		}
 	}
 
-	// Deduplicate
 	seen := make(map[string]bool)
 	var unique []string
 	for _, ref := range refs {

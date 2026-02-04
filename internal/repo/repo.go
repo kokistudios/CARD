@@ -16,7 +16,6 @@ import (
 	"github.com/kokistudios/card/internal/store"
 )
 
-// Repo represents a registered repository.
 type Repo struct {
 	ID        string    `yaml:"id"`
 	Name      string    `yaml:"name"`
@@ -25,25 +24,19 @@ type Repo struct {
 	AddedAt   time.Time `yaml:"added_at"`
 }
 
-// DeriveID computes a stable repo ID from a git remote URL.
 func DeriveID(remoteURL string) string {
 	normalized := NormalizeRemote(remoteURL)
 	h := sha256.Sum256([]byte(normalized))
 	return fmt.Sprintf("%x", h[:6]) // 12 hex chars
 }
 
-// NormalizeRemote normalizes a git remote URL to a canonical form.
-// git@github.com:user/repo.git -> github.com/user/repo
-// https://github.com/user/repo.git -> github.com/user/repo
 func NormalizeRemote(raw string) string {
 	s := strings.TrimSpace(raw)
 
-	// Handle SSH format: git@host:user/repo
 	sshRe := regexp.MustCompile(`^[\w-]+@([\w.\-]+):(.+)$`)
 	if m := sshRe.FindStringSubmatch(s); m != nil {
 		s = m[1] + "/" + m[2]
 	} else {
-		// Strip protocol
 		s = regexp.MustCompile(`^https?://`).ReplaceAllString(s, "")
 		s = regexp.MustCompile(`^ssh://`).ReplaceAllString(s, "")
 	}
@@ -53,7 +46,6 @@ func NormalizeRemote(raw string) string {
 	return s
 }
 
-// getRemoteURL reads the origin remote URL from a git repo.
 func getRemoteURL(repoPath string) (string, error) {
 	cmd := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin")
 	out, err := cmd.Output()
@@ -63,7 +55,6 @@ func getRemoteURL(repoPath string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// nameFromRemote extracts a human-friendly name from a remote URL.
 func nameFromRemote(remoteURL string) string {
 	normalized := NormalizeRemote(remoteURL)
 	parts := strings.Split(normalized, "/")
@@ -73,18 +64,14 @@ func nameFromRemote(remoteURL string) string {
 	return normalized
 }
 
-// RepoFilename returns the markdown filename for a repo (without directory).
-// Format: REPO_<NAME>.md (e.g., REPO_CARD.md, REPO_STREAMGLEAN-API.md)
 func RepoFilename(name string) string {
 	return "REPO_" + strings.ToUpper(name) + ".md"
 }
 
-// Filename returns the markdown filename for this repo.
 func (r *Repo) Filename() string {
 	return RepoFilename(r.Name)
 }
 
-// Register adds a repo to the CARD store.
 func Register(s *store.Store, path string) (*Repo, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
@@ -96,7 +83,6 @@ func Register(s *store.Store, path string) (*Repo, error) {
 		return nil, fmt.Errorf("path does not exist or is not a directory: %s", absPath)
 	}
 
-	// Verify it's a git repo
 	gitDir := filepath.Join(absPath, ".git")
 	if _, err := os.Stat(gitDir); err != nil {
 		return nil, fmt.Errorf("not a git repository: %s", absPath)
@@ -110,7 +96,6 @@ func Register(s *store.Store, path string) (*Repo, error) {
 	id := DeriveID(remoteURL)
 	name := nameFromRemote(remoteURL)
 
-	// Check for duplicates
 	repoFile := filepath.Join(s.Path("repos"), RepoFilename(name))
 	if _, err := os.Stat(repoFile); err == nil {
 		return nil, fmt.Errorf("repo already registered (ID: %s)", id)
@@ -131,7 +116,6 @@ func Register(s *store.Store, path string) (*Repo, error) {
 	return r, nil
 }
 
-// saveRepo writes a repo as a markdown file with YAML frontmatter.
 func saveRepo(s *store.Store, r *Repo) error {
 	var buf bytes.Buffer
 	buf.WriteString("---\n")
@@ -153,8 +137,6 @@ func saveRepo(s *store.Store, r *Repo) error {
 	return nil
 }
 
-
-// List returns all registered repos.
 func List(s *store.Store) ([]Repo, error) {
 	reposDir := s.Path("repos")
 	entries, err := os.ReadDir(reposDir)
@@ -176,7 +158,6 @@ func List(s *store.Store) ([]Repo, error) {
 	return repos, nil
 }
 
-// Get returns a single repo by ID.
 func Get(s *store.Store, id string) (*Repo, error) {
 	reposDir := s.Path("repos")
 
@@ -197,7 +178,6 @@ func Get(s *store.Store, id string) (*Repo, error) {
 	return nil, fmt.Errorf("repo not found: %s", id)
 }
 
-// loadRepoMd reads a repo from a markdown file with YAML frontmatter.
 func loadRepoMd(path string) (*Repo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -223,7 +203,6 @@ func loadRepoMd(path string) (*Repo, error) {
 	return &r, nil
 }
 
-// Remove deregisters a repo.
 func Remove(s *store.Store, id string) error {
 	r, err := Get(s, id)
 	if err != nil {
@@ -233,7 +212,6 @@ func Remove(s *store.Store, id string) error {
 	return os.Remove(path)
 }
 
-// CheckHealth verifies a single repo's health.
 func CheckHealth(r Repo) []store.Issue {
 	var issues []store.Issue
 
@@ -265,7 +243,6 @@ func CheckHealth(r Repo) []store.Issue {
 	return issues
 }
 
-// CheckAllHealth runs health checks on all registered repos.
 func CheckAllHealth(s *store.Store) ([]store.Issue, error) {
 	repos, err := List(s)
 	if err != nil {

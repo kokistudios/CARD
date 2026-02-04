@@ -17,7 +17,6 @@ import (
 //go:embed templates/*.md
 var templateFS embed.FS
 
-// repoInfo holds display data for a single repo in multi-repo templates.
 type repoInfo struct {
 	ID     string
 	Name   string
@@ -26,7 +25,6 @@ type repoInfo struct {
 	GitLog string
 }
 
-// executionAttemptInfo holds display data for an execution attempt.
 type executionAttemptInfo struct {
 	Attempt int
 	Started string // formatted timestamp
@@ -34,7 +32,6 @@ type executionAttemptInfo struct {
 	Reason  string
 }
 
-// templateData holds the data injected into phase templates.
 type templateData struct {
 	SessionID            string
 	Description          string
@@ -50,7 +47,6 @@ type templateData struct {
 	PriorAttemptReason   string
 }
 
-// RenderSessionWidePrompt renders a phase template with all session repos.
 func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, workDir string, priorArtifacts []*artifact.Artifact) (string, error) {
 	filename := fmt.Sprintf("templates/%s.md", string(p))
 	raw, err := templateFS.ReadFile(filename)
@@ -60,7 +56,6 @@ func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, wor
 
 	repos := buildRepoList(s, sess)
 
-	// Build execution history for template
 	var execHistory []executionAttemptInfo
 	for _, eh := range sess.ExecutionHistory {
 		execHistory = append(execHistory, executionAttemptInfo{
@@ -83,14 +78,12 @@ func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, wor
 		IsReExecution:     len(sess.ExecutionHistory) > 1,
 	}
 
-	// Set prior attempt info for re-executions
 	if len(sess.ExecutionHistory) > 1 {
 		lastAttempt := sess.ExecutionHistory[len(sess.ExecutionHistory)-1]
 		data.PriorAttemptOutcome = lastAttempt.Outcome
 		data.PriorAttemptReason = lastAttempt.Reason
 	}
 
-	// Assemble prior artifact content
 	if len(priorArtifacts) > 0 {
 		var parts []string
 		for _, a := range priorArtifacts {
@@ -115,7 +108,6 @@ func RenderSessionWidePrompt(s *store.Store, sess *session.Session, p Phase, wor
 	return buf.String(), nil
 }
 
-// RenderSessionWideInitialMessage creates the initial message for a session-wide phase.
 func RenderSessionWideInitialMessage(s *store.Store, sess *session.Session, p Phase) string {
 	phaseLabel := strings.ToUpper(string(p)[:1]) + string(p)[1:]
 
@@ -145,7 +137,6 @@ func RenderSessionWideInitialMessage(s *store.Store, sess *session.Session, p Ph
 	return msg
 }
 
-// buildRepoList assembles repoInfo for all repos in a session.
 func buildRepoList(s *store.Store, sess *session.Session) []repoInfo {
 	var repos []repoInfo
 	for _, repoID := range sess.Repos {
